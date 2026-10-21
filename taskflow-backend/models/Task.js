@@ -1,22 +1,32 @@
-// Import mongoose to define our schema
-const mongoose = require('mongoose');
+const mongoose = require("mongoose");
 
-// Define the "shape" of a Task document
-const taskSchema = new mongoose.Schema({
-  title: {
-    type: String,
-    required: true,
+const taskSchema = new mongoose.Schema(
+  {
+    title: { type: String, required: true, trim: true },
+    description: { type: String, default: "", trim: true },
+    status: {
+      type: String,
+      enum: ["Pending", "In Progress", "Completed"],
+      default: "Pending",
+    },
+    priority: {
+      type: String,
+      enum: ["Low", "Medium", "High"],
+      default: "Medium",
+    },
+    dueDate: { type: Date, default: null },
+    createdBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      required: true,
+    },
+    assignedTo: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
   },
-  status: {
-    type: String,
-    enum: ['Pending', 'In Progress', 'Completed'], // only these 3 values allowed
-    default: 'Pending',
-  },
-}, {
-  timestamps: true, // automatically adds createdAt and updatedAt fields
-});
+  { timestamps: true }
+);
 
-// Create the model — this gives us a "Task" object we can use to interact with the database
-const Task = mongoose.model('Task', taskSchema);
-
-module.exports = Task;
+module.exports = mongoose.model("Task", taskSchema);
