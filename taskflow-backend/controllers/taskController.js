@@ -41,30 +41,71 @@ const createTask = async (req, res) => {
   }
 };
 
-// PUT — update an existing task by its ID  (unchanged today, rewritten tomorrow)
+// helper: fill in creator/assignee names on a task
+const populateTask = (task) =>
+  task.populate([
+    { path: 'createdBy', select: 'name email' },
+    { path: 'assignedTo', select: 'name email' },
+  ]);
+
+// PUT — update a task (permission-checked, whitelisted fields only)
 const updateTask = async (req, res) => {
   try {
-    const updatedTask = await Task.findByIdAndUpdate(
-      req.params.id,
-      req.body,
-      { new: true, runValidators: true }
-    );
-    if (!updatedTask) {
+    const task = await Task.findById(req.params.id);
+    if (!task) {
       return res.status(404).json({ message: 'Task not found' });
     }
-    res.json(updatedTask);
+
+    const userId = req.user._id.toString();
+    const isAdmin = req.user.role === 'Admin';
+    const isCreator = task.createdBy && task.createdBy.toString() === userId;
+    const isAssignee = task.assignedTo && task.assignedTo.toString() === userId;
+
+    if (!isAdmin && !isCreator && !isAssignee) {
+      return res.status(403).json({ message: 'You are not allowed to edit this task' });
+    }
+
+    // Admin/creator can change everything below; assignee can only change status
+    const allowedFields =
+      isAdmin || isCreator
+        ? ['title', 'description', 'status', 'priority', 'dueDate', 'assignedTo']
+        : ['status'];
+
+    allowedFields.forEach((field) => {
+      if (req.body[field] !== undefined) {
+        // an empty assignedTo / dueDate means "clear it"
+        task[field] =
+          (field === 'assignedTo' || field === 'dueDate') && !req.body[field]
+            ? null
+            : req.body[field];
+      }
+    });
+
+    await task.save(); // runs schema validation
+    await populateTask(task);
+    res.json(task);
   } catch (error) {
     res.status(400).json({ message: 'Error updating task', error: error.message });
   }
 };
 
-// DELETE — remove a task by its ID  (unchanged)
+// DELETE — Admin or the task's creator
 const deleteTask = async (req, res) => {
   try {
-    const deletedTask = await Task.findByIdAndDelete(req.params.id);
-    if (!deletedTask) {
+    const task = await Task.findById(req.params.id);
+    if (!task) {
       return res.status(404).json({ message: 'Task not found' });
     }
+
+    const isAdmin = req.user.role === 'Admin';
+    const isCreator =
+      task.createdBy && task.createdBy.toString() === req.user._id.toString();
+
+    if (!isAdmin && !isCreator) {
+      return res.status(403).json({ message: 'You are not allowed to delete this task' });
+    }
+
+    await task.deleteOne();
     res.json({ message: 'Task deleted successfully' });
   } catch (error) {
     res.status(500).json({ message: 'Error deleting task', error: error.message });
