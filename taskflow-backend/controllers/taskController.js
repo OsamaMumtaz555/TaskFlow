@@ -1,6 +1,13 @@
 // Import the Task model
 const Task = require('../models/Task');
 
+// helper: fill in creator/assignee names on a task
+const populateTask = (task) =>
+  task.populate([
+    { path: 'createdBy', select: 'name email' },
+    { path: 'assignedTo', select: 'name email' },
+  ]);
+
 // GET tasks — Admin sees all; Member sees only tasks they created or are assigned to
 const getAllTasks = async (req, res) => {
   try {
@@ -35,18 +42,12 @@ const createTask = async (req, res) => {
       createdBy: req.user._id, // always taken from the verified token, never from the client
     });
 
+    await populateTask(newTask); // so createdBy/assignedTo come back as objects, like in getAllTasks
     res.status(201).json(newTask);
   } catch (error) {
     res.status(400).json({ message: 'Error creating task', error: error.message });
   }
 };
-
-// helper: fill in creator/assignee names on a task
-const populateTask = (task) =>
-  task.populate([
-    { path: 'createdBy', select: 'name email' },
-    { path: 'assignedTo', select: 'name email' },
-  ]);
 
 // PUT — update a task (permission-checked, whitelisted fields only)
 const updateTask = async (req, res) => {
@@ -112,4 +113,4 @@ const deleteTask = async (req, res) => {
   }
 };
 
-module.exports = { getAllTasks, createTask, updateTask, deleteTask };
+module.exports = { getAllTasks, createTask, updateTask, deleteTask }; 

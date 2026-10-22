@@ -1,5 +1,10 @@
 import { useState, useEffect } from "react";
 import api from "../api/api";
+import TaskEditModal from "./TaskEditModal";
+
+// createdBy / assignedTo can be a populated object or a plain id string
+const getId = (value) =>
+  value && typeof value === "object" ? value._id : value;
 
 function TaskBoard() {
   const [tasks, setTasks] = useState([]);
@@ -10,6 +15,7 @@ function TaskBoard() {
   const [newTitle, setNewTitle] = useState("");
   const [newStatus, setNewStatus] = useState("Pending");
   const [createError, setCreateError] = useState("");
+  const [editingTask, setEditingTask] = useState(null);
 
   const user = JSON.parse(localStorage.getItem("user"));
 
@@ -18,6 +24,25 @@ function TaskBoard() {
     "In Progress": "bg-yellow-100 text-yellow-700",
     Pending: "bg-gray-200 text-gray-700",
   };
+
+  const priorityColor = {
+    High: "bg-red-100 text-red-700",
+    Medium: "bg-blue-100 text-blue-700",
+    Low: "bg-gray-100 text-gray-600",
+  };
+
+  // Same rules as the backend
+  const isAdmin = user?.role === "Admin";
+  const isCreator = (task) => getId(task.createdBy) === user?._id;
+  const isAssignee = (task) => getId(task.assignedTo) === user?._id;
+  const canEditAll = (task) => isAdmin || isCreator(task);
+  const canEdit = (task) => canEditAll(task) || isAssignee(task);
+  const canDelete = (task) => isAdmin || isCreator(task);
+
+  const isOverdue = (task) =>
+    task.dueDate &&
+    task.status !== "Completed" &&
+    new Date(task.dueDate) < new Date();
 
   useEffect(() => {
     const fetchTasks = async () => {
@@ -49,7 +74,7 @@ function TaskBoard() {
         title: newTitle,
         status: newStatus,
       });
-      setTasks([...tasks, response.data]);
+      setTasks([response.data, ...tasks]);
       setNewTitle("");
       setNewStatus("Pending");
     } catch (err) {
@@ -59,12 +84,18 @@ function TaskBoard() {
   };
 
   const handleDelete = async (taskId) => {
+    if (!window.confirm("Delete this task?")) return;
     try {
       await api.delete(`/tasks/${taskId}`);
       setTasks(tasks.filter((t) => t._id !== taskId));
     } catch (err) {
       console.error("Failed to delete task:", err);
     }
+  };
+
+  const handleTaskSaved = (updatedTask) => {
+    setTasks(tasks.map((t) => (t._id === updatedTask._id ? updatedTask : t)));
+    setEditingTask(null);
   };
 
   const filteredTasks = tasks.filter((task) => {
@@ -176,16 +207,49 @@ function TaskBoard() {
           filteredTasks.map((task) => (
             <div
               key={task._id}
-              className="bg-white p-4 rounded-lg shadow-sm flex justify-between items-center"
+              className="bg-white p-4 rounded-lg shadow-sm flex justify-between items-center gap-4"
             >
-              <span className="text-gray-800 font-medium">{task.title}</span>
-              <div className="flex items-center gap-3">
+              <div className="min-w-0">
+                <p className="text-gray-800 font-medium">{task.title}</p>
+                {task.description && (
+                  <p className="text-sm text-gray-500 truncate">
+                    {task.description}
+                  </p>
+                )}
+                {task.dueDate && (
+                  <p
+                    className={`text-xs mt-1 ${
+                      isOverdue(task) ? "text-red-600 font-medium" : "text-gray-400"
+                    }`}
+                  >
+                    Due {new Date(task.dueDate).toLocaleDateString()}
+                    {isOverdue(task) && " (overdue)"}
+                  </p>
+                )}
+              </div>
+
+              <div className="flex items-center gap-3 shrink-0">
+                {task.priority && (
+                  <span
+                    className={`text-xs px-2 py-1 rounded-full font-medium ${priorityColor[task.priority]}`}
+                  >
+                    {task.priority}
+                  </span>
+                )}
                 <span
                   className={`text-sm px-3 py-1 rounded-full font-medium ${statusColor[task.status]}`}
                 >
                   {task.status}
                 </span>
-                {user?.role === "Admin" && (
+                {canEdit(task) && (
+                  <button
+                    onClick={() => setEditingTask(task)}
+                    className="text-blue-600 hover:text-blue-800 text-sm font-medium"
+                  >
+                    Edit
+                  </button>
+                )}
+                {canDelete(task) && (
                   <button
                     onClick={() => handleDelete(task._id)}
                     className="text-red-600 hover:text-red-800 text-sm font-medium"
@@ -198,6 +262,15 @@ function TaskBoard() {
           ))
         )}
       </div>
+
+      {editingTask && (
+        <TaskEditModal
+          task={editingTask}
+          canEditAll={canEditAll(editingTask)}
+          onClose={() => setEditingTask(null)}
+          onSaved={handleTaskSaved}
+        />
+      )}
     </div>
   );
 }
