@@ -1,5 +1,7 @@
-// Import the Task model
+// Import the models
+const mongoose = require('mongoose');
 const Task = require('../models/Task');
+const User = require('../models/User');
 
 // helper: fill in creator/assignee names on a task
 const populateTask = (task) =>
@@ -7,6 +9,13 @@ const populateTask = (task) =>
     { path: 'createdBy', select: 'name email' },
     { path: 'assignedTo', select: 'name email' },
   ]);
+
+// helper: an assignee is valid if empty (unassigned) or an existing user
+const assigneeIsValid = async (id) => {
+  if (!id) return true;
+  if (!mongoose.Types.ObjectId.isValid(id)) return false;
+  return !!(await User.exists({ _id: id }));
+};
 
 // GET tasks — Admin sees all; Member sees only tasks they created or are assigned to
 const getAllTasks = async (req, res) => {
@@ -32,6 +41,10 @@ const createTask = async (req, res) => {
   try {
     const { title, description, status, priority, dueDate, assignedTo } = req.body;
 
+    if (!(await assigneeIsValid(assignedTo))) {
+      return res.status(400).json({ message: 'Assigned user does not exist' });
+    }
+
     const newTask = await Task.create({
       title,
       description,
@@ -42,7 +55,7 @@ const createTask = async (req, res) => {
       createdBy: req.user._id, // always taken from the verified token, never from the client
     });
 
-    await populateTask(newTask); // so createdBy/assignedTo come back as objects, like in getAllTasks
+    await populateTask(newTask);
     res.status(201).json(newTask);
   } catch (error) {
     res.status(400).json({ message: 'Error creating task', error: error.message });
@@ -67,10 +80,14 @@ const updateTask = async (req, res) => {
     }
 
     // Admin/creator can change everything below; assignee can only change status
-    const allowedFields =
-      isAdmin || isCreator
-        ? ['title', 'description', 'status', 'priority', 'dueDate', 'assignedTo']
-        : ['status'];
+    const canEditAll = isAdmin || isCreator;
+    const allowedFields = canEditAll
+      ? ['title', 'description', 'status', 'priority', 'dueDate', 'assignedTo']
+      : ['status'];
+
+    if (canEditAll && !(await assigneeIsValid(req.body.assignedTo))) {
+      return res.status(400).json({ message: 'Assigned user does not exist' });
+    }
 
     allowedFields.forEach((field) => {
       if (req.body[field] !== undefined) {
@@ -113,4 +130,4 @@ const deleteTask = async (req, res) => {
   }
 };
 
-module.exports = { getAllTasks, createTask, updateTask, deleteTask }; 
+module.exports = { getAllTasks, createTask, updateTask, deleteTask };

@@ -3,13 +3,16 @@ import api from "../api/api";
 
 // canEditAll = true  -> Admin or task creator (all fields)
 // canEditAll = false -> assignee (status only)
-function TaskEditModal({ task, canEditAll, onClose, onSaved }) {
+function TaskEditModal({ task, users, canEditAll, onClose, onSaved }) {
   const [title, setTitle] = useState(task.title);
   const [description, setDescription] = useState(task.description || "");
   const [status, setStatus] = useState(task.status);
   const [priority, setPriority] = useState(task.priority || "Medium");
   const [dueDate, setDueDate] = useState(
     task.dueDate ? task.dueDate.slice(0, 10) : ""
+  );
+  const [assignedTo, setAssignedTo] = useState(
+    task.assignedTo?._id || task.assignedTo || ""
   );
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -26,7 +29,7 @@ function TaskEditModal({ task, canEditAll, onClose, onSaved }) {
     setSaving(true);
     try {
       const payload = canEditAll
-        ? { title: title.trim(), description, status, priority, dueDate }
+        ? { title: title.trim(), description, status, priority, dueDate, assignedTo }
         : { status };
 
       const response = await api.put(`/tasks/${task._id}`, payload);
@@ -118,17 +121,38 @@ function TaskEditModal({ task, canEditAll, onClose, onSaved }) {
             </div>
           </div>
 
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Due date
-            </label>
-            <input
-              type="date"
-              value={dueDate}
-              onChange={(e) => setDueDate(e.target.value)}
-              disabled={!canEditAll}
-              className={inputClass}
-            />
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Due date
+              </label>
+              <input
+                type="date"
+                value={dueDate}
+                onChange={(e) => setDueDate(e.target.value)}
+                disabled={!canEditAll}
+                className={inputClass}
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Assign to
+              </label>
+              <select
+                value={assignedTo}
+                onChange={(e) => setAssignedTo(e.target.value)}
+                disabled={!canEditAll}
+                className={inputClass}
+              >
+                <option value="">Unassigned</option>
+                {users.map((u) => (
+                  <option key={u._id} value={u._id}>
+                    {u.name}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
 
           {error && <p className="text-red-600 text-sm">{error}</p>}

@@ -8,12 +8,14 @@ const getId = (value) =>
 
 function TaskBoard() {
   const [tasks, setTasks] = useState([]);
+  const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState("All");
   const [newTitle, setNewTitle] = useState("");
   const [newStatus, setNewStatus] = useState("Pending");
+  const [newAssignee, setNewAssignee] = useState("");
   const [createError, setCreateError] = useState("");
   const [editingTask, setEditingTask] = useState(null);
 
@@ -45,19 +47,23 @@ function TaskBoard() {
     new Date(task.dueDate) < new Date();
 
   useEffect(() => {
-    const fetchTasks = async () => {
+    const fetchData = async () => {
       try {
-        const response = await api.get("/tasks");
-        setTasks(response.data);
+        const [tasksRes, usersRes] = await Promise.all([
+          api.get("/tasks"),
+          api.get("/users"),
+        ]);
+        setTasks(tasksRes.data);
+        setUsers(usersRes.data);
       } catch (err) {
-        console.error("Failed to fetch tasks:", err);
+        console.error("Failed to fetch data:", err);
         setError("Could not load tasks");
       } finally {
         setLoading(false);
       }
     };
 
-    fetchTasks();
+    fetchData();
   }, []);
 
   const handleCreateTask = async (e) => {
@@ -73,13 +79,15 @@ function TaskBoard() {
       const response = await api.post("/tasks", {
         title: newTitle,
         status: newStatus,
+        assignedTo: newAssignee,
       });
       setTasks([response.data, ...tasks]);
       setNewTitle("");
       setNewStatus("Pending");
+      setNewAssignee("");
     } catch (err) {
       console.error("Failed to create task:", err);
-      setCreateError("Could not create task");
+      setCreateError(err.response?.data?.message || "Could not create task");
     }
   };
 
@@ -161,6 +169,18 @@ function TaskBoard() {
           className="flex-1 border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
         />
         <select
+          value={newAssignee}
+          onChange={(e) => setNewAssignee(e.target.value)}
+          className="border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+        >
+          <option value="">Unassigned</option>
+          {users.map((u) => (
+            <option key={u._id} value={u._id}>
+              {u.name}
+            </option>
+          ))}
+        </select>
+        <select
           value={newStatus}
           onChange={(e) => setNewStatus(e.target.value)}
           className="border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -216,16 +236,27 @@ function TaskBoard() {
                     {task.description}
                   </p>
                 )}
-                {task.dueDate && (
-                  <p
-                    className={`text-xs mt-1 ${
-                      isOverdue(task) ? "text-red-600 font-medium" : "text-gray-400"
-                    }`}
-                  >
-                    Due {new Date(task.dueDate).toLocaleDateString()}
-                    {isOverdue(task) && " (overdue)"}
-                  </p>
-                )}
+                <div className="flex flex-wrap gap-x-4 mt-1 text-xs text-gray-400">
+                  {task.assignedTo && (
+                    <span>
+                      Assigned to{" "}
+                      {isAssignee(task) ? "you" : task.assignedTo.name}
+                    </span>
+                  )}
+                  {isAssignee(task) && !isCreator(task) && task.createdBy && (
+                    <span>From {task.createdBy.name}</span>
+                  )}
+                  {task.dueDate && (
+                    <span
+                      className={
+                        isOverdue(task) ? "text-red-600 font-medium" : ""
+                      }
+                    >
+                      Due {new Date(task.dueDate).toLocaleDateString()}
+                      {isOverdue(task) && " (overdue)"}
+                    </span>
+                  )}
+                </div>
               </div>
 
               <div className="flex items-center gap-3 shrink-0">
@@ -266,6 +297,7 @@ function TaskBoard() {
       {editingTask && (
         <TaskEditModal
           task={editingTask}
+          users={users}
           canEditAll={canEditAll(editingTask)}
           onClose={() => setEditingTask(null)}
           onSaved={handleTaskSaved}

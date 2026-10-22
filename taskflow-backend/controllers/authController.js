@@ -4,7 +4,7 @@ const generateToken = require('../utils/generateToken');
 // REGISTER — create a new user
 const registerUser = async (req, res) => {
   try {
-    const { name, email, password, role } = req.body;
+    const { name, email, password } = req.body; // role is no longer read from the client
 
     // Check if a user with this email already exists
     const userExists = await User.findOne({ email });
@@ -13,7 +13,8 @@ const registerUser = async (req, res) => {
     }
 
     // Create the new user (password gets hashed automatically by our pre('save') middleware)
-    const user = await User.create({ name, email, password, role });
+    // role is not passed, so the schema default 'Member' always applies
+    const user = await User.create({ name, email, password });
 
     // Respond with user info + a token, so they're immediately logged in after registering
     res.status(201).json({

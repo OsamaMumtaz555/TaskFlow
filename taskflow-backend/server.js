@@ -20,10 +20,13 @@ app.use(cors());
 // Import our task routes
 const taskRoutes = require('./routes/taskRoutes');
 const authRoutes = require('./routes/authRoutes');  
+const userRoutes = require('./routes/userRoutes');
+
 
 // Tell Express: any request starting with /api/tasks goes to taskRoutes
 app.use('/api/tasks', taskRoutes);
 app.use('/api/auth', authRoutes);
+app.use('/api/users', userRoutes);
 
 // Define the port number the server will listen on
 const PORT = 5000;
