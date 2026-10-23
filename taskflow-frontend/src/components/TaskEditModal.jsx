@@ -19,7 +19,7 @@ function TaskEditModal({ task, users, canEditAll, onClose, onSaved }) {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    setError("");
+    setError(""); 
 
     if (canEditAll && !title.trim()) {
       setError("Title cannot be empty");

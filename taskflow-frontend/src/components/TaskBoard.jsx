@@ -1,16 +1,20 @@
 import { useState, useEffect } from "react";
 import api from "../api/api";
 import TaskEditModal from "./TaskEditModal";
-
-// createdBy / assignedTo can be a populated object or a plain id string
-const getId = (value) =>
-  value && typeof value === "object" ? value._id : value;
+import {
+  getId,
+  getCurrentUser,
+  statusColor,
+  priorityColor,
+  isOverdue,
+} from "../utils/taskHelpers";
 
 function TaskBoard() {
   const [tasks, setTasks] = useState([]);
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [view, setView] = useState("mine");
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState("All");
   const [newTitle, setNewTitle] = useState("");
@@ -19,19 +23,7 @@ function TaskBoard() {
   const [createError, setCreateError] = useState("");
   const [editingTask, setEditingTask] = useState(null);
 
-  const user = JSON.parse(localStorage.getItem("user"));
-
-  const statusColor = {
-    Completed: "bg-green-100 text-green-700",
-    "In Progress": "bg-yellow-100 text-yellow-700",
-    Pending: "bg-gray-200 text-gray-700",
-  };
-
-  const priorityColor = {
-    High: "bg-red-100 text-red-700",
-    Medium: "bg-blue-100 text-blue-700",
-    Low: "bg-gray-100 text-gray-600",
-  };
+  const user = getCurrentUser();
 
   // Same rules as the backend
   const isAdmin = user?.role === "Admin";
@@ -41,10 +33,19 @@ function TaskBoard() {
   const canEdit = (task) => canEditAll(task) || isAssignee(task);
   const canDelete = (task) => isAdmin || isCreator(task);
 
-  const isOverdue = (task) =>
-    task.dueDate &&
-    task.status !== "Completed" &&
-    new Date(task.dueDate) < new Date();
+  const viewFilters = {
+    mine: (t) => isCreator(t) || isAssignee(t),
+    assigned: (t) => isAssignee(t),
+    created: (t) => isCreator(t),
+    all: () => true,
+  };
+
+  const tabs = [
+    { key: "mine", label: "All mine" },
+    { key: "assigned", label: "Assigned to me" },
+    { key: "created", label: "Created by me" },
+    ...(isAdmin ? [{ key: "all", label: "Everyone's tasks" }] : []),
+  ];
 
   useEffect(() => {
     const fetchData = async () => {
@@ -106,7 +107,9 @@ function TaskBoard() {
     setEditingTask(null);
   };
 
-  const filteredTasks = tasks.filter((task) => {
+  const viewTasks = tasks.filter(viewFilters[view]);
+
+  const filteredTasks = viewTasks.filter((task) => {
     const matchesSearch = task.title
       .toLowerCase()
       .includes(searchTerm.toLowerCase());
@@ -114,13 +117,6 @@ function TaskBoard() {
       statusFilter === "All" || task.status === statusFilter;
     return matchesSearch && matchesStatus;
   });
-
-  const taskCounts = {
-    Total: tasks.length,
-    Pending: tasks.filter((t) => t.status === "Pending").length,
-    "In Progress": tasks.filter((t) => t.status === "In Progress").length,
-    Completed: tasks.filter((t) => t.status === "Completed").length,
-  };
 
   if (loading) {
     return <div className="p-8 flex-1">Loading tasks...</div>;
@@ -133,29 +129,6 @@ function TaskBoard() {
   return (
     <div className="p-8 flex-1">
       <h2 className="text-2xl font-bold text-gray-800 mb-6">My Tasks</h2>
-
-      <div className="grid grid-cols-4 gap-4 mb-6">
-        <div className="bg-white p-4 rounded-lg shadow-sm text-center">
-          <p className="text-2xl font-bold text-gray-800">{taskCounts.Total}</p>
-          <p className="text-sm text-gray-500">Total</p>
-        </div>
-        <div className="bg-white p-4 rounded-lg shadow-sm text-center">
-          <p className="text-2xl font-bold text-gray-700">{taskCounts.Pending}</p>
-          <p className="text-sm text-gray-500">Pending</p>
-        </div>
-        <div className="bg-white p-4 rounded-lg shadow-sm text-center">
-          <p className="text-2xl font-bold text-yellow-600">
-            {taskCounts["In Progress"]}
-          </p>
-          <p className="text-sm text-gray-500">In Progress</p>
-        </div>
-        <div className="bg-white p-4 rounded-lg shadow-sm text-center">
-          <p className="text-2xl font-bold text-green-600">
-            {taskCounts.Completed}
-          </p>
-          <p className="text-sm text-gray-500">Completed</p>
-        </div>
-      </div>
 
       <form
         onSubmit={handleCreateTask}
@@ -200,6 +173,26 @@ function TaskBoard() {
         <p className="text-red-600 text-sm -mt-4 mb-4">{createError}</p>
       )}
 
+      {/* View tabs */}
+      <div className="flex gap-2 mb-4 border-b border-gray-200">
+        {tabs.map((tab) => {
+          const count = tasks.filter(viewFilters[tab.key]).length;
+          return (
+            <button
+              key={tab.key}
+              onClick={() => setView(tab.key)}
+              className={`px-4 py-2 text-sm font-medium -mb-px border-b-2 transition ${
+                view === tab.key
+                  ? "border-blue-600 text-blue-700"
+                  : "border-transparent text-gray-500 hover:text-gray-700"
+              }`}
+            >
+              {tab.label} ({count})
+            </button>
+          );
+        })}
+      </div>
+
       <div className="flex gap-3 mb-6">
         <input
           type="text"
@@ -222,7 +215,11 @@ function TaskBoard() {
 
       <div className="flex flex-col gap-3">
         {filteredTasks.length === 0 ? (
-          <p className="text-gray-500">No tasks match your search.</p>
+          <p className="text-gray-500">
+            {viewTasks.length === 0
+              ? "No tasks here yet."
+              : "No tasks match your search."}
+          </p>
         ) : (
           filteredTasks.map((task) => (
             <div
@@ -307,4 +304,4 @@ function TaskBoard() {
   );
 }
 
-export default TaskBoard;
+export default TaskBoard; 
