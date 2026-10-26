@@ -2,10 +2,11 @@ import { Routes, Route } from "react-router-dom";
 import LoginPage from "./pages/LoginPage";
 import DashboardPage from "./pages/DashboardPage";
 import TasksPage from "./pages/TasksPage";
+import TeamPage from "./pages/TeamPage";
 import ProtectedRoute from "./components/ProtectedRoute";
 import Layout from "./components/Layout";
 
-// Temporary placeholder until the real pages are built in Week 2
+// Temporary placeholder until the real page is built
 function ComingSoon({ title }) {
   return (
     <Layout>
@@ -41,7 +42,7 @@ function App() {
         path="/team"
         element={
           <ProtectedRoute>
-            <ComingSoon title="Team" />
+            <TeamPage />
           </ProtectedRoute>
         }
       />
@@ -57,4 +58,4 @@ function App() {
   );
 }
 
-export default App;    
+export default App;

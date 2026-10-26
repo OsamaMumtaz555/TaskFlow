@@ -55,7 +55,8 @@ function TaskBoard() {
           api.get("/users"),
         ]);
         setTasks(tasksRes.data);
-        setUsers(usersRes.data);
+                // the Admin also receives deactivated users; they can't be assigned tasks
+        setUsers(usersRes.data.filter((u) => u.isActive !== false)); 
       } catch (err) {
         console.error("Failed to fetch data:", err);
         setError("Could not load tasks");
