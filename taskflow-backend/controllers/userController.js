@@ -24,6 +24,86 @@ const getUsers = async (req, res) => {
   }
 };
 
+// GET /api/users/me — the logged-in user's current data
+const getMe = async (req, res) => {
+  res.json(toSafeUser(req.user));
+};
+
+// PUT /api/users/me — update my own name and/or email
+const updateMe = async (req, res) => {
+  try {
+    const { name, email } = req.body;
+    const user = await User.findById(req.user._id);
+
+    if (name !== undefined) {
+      if (!String(name).trim()) {
+        return res.status(400).json({ message: 'Name cannot be empty' });
+      }
+      user.name = String(name).trim();
+    }
+
+    if (email !== undefined) {
+      const cleanEmail = String(email).trim();
+      if (!cleanEmail) {
+        return res.status(400).json({ message: 'Email cannot be empty' });
+      }
+      if (cleanEmail !== user.email) {
+        const taken = await User.findOne({
+          email: cleanEmail,
+          _id: { $ne: user._id },
+        });
+        if (taken) {
+          return res.status(400).json({ message: 'Email already in use' });
+        }
+        user.email = cleanEmail;
+      }
+    }
+
+    await user.save();
+    res.json(toSafeUser(user));
+  } catch (error) {
+    res.status(400).json({ message: 'Error updating profile', error: error.message });
+  }
+};
+
+// PUT /api/users/me/password — change my own password
+const changePassword = async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+
+    if (!currentPassword || !newPassword) {
+      return res
+        .status(400)
+        .json({ message: 'Current and new password are required' });
+    }
+    if (newPassword.length < 8) {
+      return res
+        .status(400)
+        .json({ message: 'New password must be at least 8 characters' });
+    }
+
+    const user = await User.findById(req.user._id);
+
+    // 400, not 401: a wrong current password must not look like an expired session
+    const isMatch = await user.comparePassword(currentPassword);
+    if (!isMatch) {
+      return res.status(400).json({ message: 'Current password is incorrect' });
+    }
+    if (newPassword === currentPassword) {
+      return res
+        .status(400)
+        .json({ message: 'New password must be different from the current one' });
+    }
+
+    user.password = newPassword; // hashed by the pre('save') hook
+    await user.save();
+
+    res.json({ message: 'Password updated successfully' });
+  } catch (error) {
+    res.status(500).json({ message: 'Error changing password', error: error.message });
+  }
+};
+
 // POST /api/users — Admin creates a new team member
 const createUser = async (req, res) => {
   try {
@@ -97,4 +177,4 @@ const updateUser = async (req, res) => {
   }
 };
 
-module.exports = { getUsers, createUser, updateUser };
+module.exports = { getUsers, getMe, updateMe, changePassword, createUser, updateUser };

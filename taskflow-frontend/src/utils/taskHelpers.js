@@ -21,5 +21,13 @@ export const isOverdue = (task) => {
   if (!task.dueDate || task.status === "Completed") return false;
   const endOfDueDay = new Date(task.dueDate);
   endOfDueDay.setUTCHours(23, 59, 59, 999);
-  return endOfDueDay < new Date();
+  return endOfDueDay < new Date();  
+
+};
+ 
+// Merge new values into the saved user (keeps the token and role from login)
+export const saveCurrentUser = (updates) => {
+  const merged = { ...getCurrentUser(), ...updates };
+  localStorage.setItem("user", JSON.stringify(merged));
+  return merged;
 };
