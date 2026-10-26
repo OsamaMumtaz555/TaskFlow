@@ -45,6 +45,10 @@ const loginUser = async (req, res) => {
     if (!isMatch) {
       return res.status(401).json({ message: 'Invalid email or password' });
     }
+    // NEW: deactivated accounts cannot log in
+    if (user.isActive === false) {
+      return res.status(403).json({ message: 'Your account has been deactivated. Contact an administrator.' });
+    }
 
     // Credentials correct — send back user info + token
     res.json({

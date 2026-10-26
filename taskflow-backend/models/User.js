@@ -21,6 +21,10 @@ const userSchema = new mongoose.Schema({
     enum: ['Admin', 'Member'],
     default: 'Member',
   },
+  isActive: {
+    type: Boolean,
+    default: true, // false = account deactivated (cannot log in)
+  },
 }, {
   timestamps: true,
 });

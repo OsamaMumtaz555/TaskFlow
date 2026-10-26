@@ -16,15 +16,26 @@ const protect = async (req, res, next) => {
 
       // Find the user by the ID stored in the token, exclude the password field
       req.user = await User.findById(decoded.id).select('-password');
-
-      next(); // token is valid — let the request continue to the controller
     } catch (error) {
-      res.status(401).json({ message: 'Not authorized, token failed' });
+      return res.status(401).json({ message: 'Not authorized, token failed' });
     }
-  } else {
-    res.status(401).json({ message: 'Not authorized, no token provided' });
+
+    // The account may have been deleted since the token was issued
+    if (!req.user) {
+      return res.status(401).json({ message: 'Not authorized, user no longer exists' });
+    }
+
+    // The account may have been deactivated by an Admin
+    if (req.user.isActive === false) {
+      return res.status(401).json({ message: 'Your account has been deactivated' });
+    }
+
+    return next(); // token is valid and the account is active, so the request continues
   }
+
+  return res.status(401).json({ message: 'Not authorized, no token provided' });
 };
+
 // Middleware to restrict access to specific roles
 const adminOnly = (req, res, next) => {
   if (req.user && req.user.role === 'Admin') {

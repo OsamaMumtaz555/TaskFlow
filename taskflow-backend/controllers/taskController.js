@@ -14,7 +14,7 @@ const populateTask = (task) =>
 const assigneeIsValid = async (id) => {
   if (!id) return true;
   if (!mongoose.Types.ObjectId.isValid(id)) return false;
-  return !!(await User.exists({ _id: id }));
+  return !!(await User.exists({ _id: id, isActive: { $ne: false } }));
 };
 
 // GET tasks — Admin sees all; Member sees only tasks they created or are assigned to

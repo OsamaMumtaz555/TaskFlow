@@ -21,7 +21,7 @@ function Login() {
     navigate("/dashboard");
     } catch (err) {
       console.error("Login failed:", err);
-      setError("Invalid email or password");
+      setError(err.response?.data?.message || "Login failed. Please try again.");   
     }
   };
 
