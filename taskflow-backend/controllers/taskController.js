@@ -85,8 +85,14 @@ const updateTask = async (req, res) => {
       ? ['title', 'description', 'status', 'priority', 'dueDate', 'assignedTo']
       : ['status'];
 
-    if (canEditAll && !(await assigneeIsValid(req.body.assignedTo))) {
-      return res.status(400).json({ message: 'Assigned user does not exist' });
+    // Only validate the assignee if it is actually being changed,
+    // so tasks already assigned to a deactivated user can still be edited
+    if (canEditAll && req.body.assignedTo !== undefined) {
+      const current = task.assignedTo ? task.assignedTo.toString() : '';
+      const requested = req.body.assignedTo ? String(req.body.assignedTo) : '';
+      if (requested !== current && !(await assigneeIsValid(requested))) {
+        return res.status(400).json({ message: 'Assigned user does not exist' });
+      }
     }
 
     allowedFields.forEach((field) => {

@@ -17,9 +17,22 @@ function TaskEditModal({ task, users, canEditAll, onClose, onSaved }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
+  // If the current assignee was deactivated, keep them visible in the dropdown
+  const currentAssignee =
+    task.assignedTo && typeof task.assignedTo === "object"
+      ? task.assignedTo
+      : null;
+  const assigneeOptions =
+    currentAssignee && !users.some((u) => u._id === currentAssignee._id)
+      ? [
+          ...users,
+          { _id: currentAssignee._id, name: `${currentAssignee.name} (inactive)` },
+        ]
+      : users;
+
   const handleSubmit = async (e) => {
     e.preventDefault();
-    setError(""); 
+    setError("");
 
     if (canEditAll && !title.trim()) {
       setError("Title cannot be empty");
@@ -146,7 +159,7 @@ function TaskEditModal({ task, users, canEditAll, onClose, onSaved }) {
                 className={inputClass}
               >
                 <option value="">Unassigned</option>
-                {users.map((u) => (
+                {assigneeOptions.map((u) => (
                   <option key={u._id} value={u._id}>
                     {u.name}
                   </option>
