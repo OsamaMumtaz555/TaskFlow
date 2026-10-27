@@ -15,6 +15,9 @@ function Sidebar() {
         <NavLink to="/tasks" className={linkClass}>
           My Tasks
         </NavLink>
+        <NavLink to="/chat" className={linkClass}>
+          Chat
+        </NavLink>
         <NavLink to="/team" className={linkClass}>
           Team
         </NavLink>
@@ -26,4 +29,4 @@ function Sidebar() {
   );
 }
 
-export default Sidebar;
+export default Sidebar; 
