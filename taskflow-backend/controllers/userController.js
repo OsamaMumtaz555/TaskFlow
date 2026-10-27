@@ -171,6 +171,11 @@ const updateUser = async (req, res) => {
     if (isActive !== undefined) user.isActive = isActive;
 
     await user.save();
+    // NEW: kick a deactivated user out of any open chat connections
+    if (isActive === false) {
+      req.app.get('io')?.in(`user:${user._id}`).disconnectSockets(true);
+    }
+
     res.json(toSafeUser(user));
   } catch (error) {
     res.status(400).json({ message: 'Error updating user', error: error.message });
