@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useLayoutEffect } from "react";
 import api from "../api/api";
+import { getSocket } from "../socket";
 import {
   initials,
   formatTime,
@@ -16,7 +17,13 @@ function MessageWindow({ conversation, currentUserId, onRead }) {
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [error, setError] = useState("");
 
+  const [text, setText] = useState("");
+  const [sending, setSending] = useState(false);
+  const [sendError, setSendError] = useState("");
+  const [connected, setConnected] = useState(true);
+
   const scrollRef = useRef(null);
+  const inputRef = useRef(null);
   // What to do with the scrollbar after the next render:
   // "bottom" (show newest) or { restoreFrom } (keep position after loading older)
   const pendingScroll = useRef("bottom");
@@ -57,6 +64,51 @@ function MessageWindow({ conversation, currentUserId, onRead }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversation._id]);
 
+  // Live: new messages for THIS conversation + connection status
+  useEffect(() => {
+    const socket = getSocket();
+    if (!socket) return;
+
+    setConnected(socket.connected);
+
+    const onConnect = () => setConnected(true);
+    const onDisconnect = () => setConnected(false);
+
+    const onNewMessage = (message) => {
+      if (message.conversation !== conversation._id) return;
+
+      const mine = message.sender._id === currentUserId;
+      const el = scrollRef.current;
+      const nearBottom = el
+        ? el.scrollHeight - el.scrollTop - el.clientHeight < 150
+        : true;
+
+      // follow the conversation, unless the user scrolled up to read old messages
+      if (mine || nearBottom) pendingScroll.current = "bottom";
+
+      setMessages((prev) =>
+        prev.some((m) => m._id === message._id) ? prev : [...prev, message]
+      );
+
+      // I'm looking at this conversation, so it counts as read
+      if (!mine) {
+        api.put(`/chats/${conversation._id}/read`).catch((err) => {
+          console.error("Failed to mark as read:", err);
+        });
+      }
+    };
+
+    socket.on("connect", onConnect);
+    socket.on("disconnect", onDisconnect);
+    socket.on("message:new", onNewMessage);
+
+    return () => {
+      socket.off("connect", onConnect);
+      socket.off("disconnect", onDisconnect);
+      socket.off("message:new", onNewMessage);
+    };
+  }, [conversation._id, currentUserId]);
+
   // Apply the scroll decision right after messages are drawn
   useLayoutEffect(() => {
     const el = scrollRef.current;
@@ -70,6 +122,11 @@ function MessageWindow({ conversation, currentUserId, onRead }) {
     }
     pendingScroll.current = null;
   }, [messages]);
+
+  // Focus the input when a conversation opens
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, [conversation._id]);
 
   const loadOlder = async () => {
     if (messages.length === 0) return;
@@ -87,6 +144,42 @@ function MessageWindow({ conversation, currentUserId, onRead }) {
     } finally {
       setLoadingOlder(false);
     }
+  };
+
+  const handleSend = (e) => {
+    e.preventDefault();
+    const clean = text.trim();
+    if (!clean || sending) return;
+
+    const socket = getSocket();
+    if (!socket || !socket.connected) {
+      setSendError("Not connected. Please wait while we reconnect.");
+      return;
+    }
+
+    setSending(true);
+    setSendError("");
+
+    // The server answers with an "ack": { ok: true } or { ok: false, error }
+    socket
+      .timeout(8000)
+      .emit(
+        "message:send",
+        { conversationId: conversation._id, text: clean },
+        (err, reply) => {
+          setSending(false);
+          if (err) {
+            setSendError("The server did not respond. Please try again.");
+            return;
+          }
+          if (!reply?.ok) {
+            setSendError(reply?.error || "Could not send the message");
+            return;
+          }
+          setText(""); // the message itself appears through "message:new"
+          inputRef.current?.focus();
+        }
+      );
   };
 
   const other = conversation.other;
@@ -109,6 +202,12 @@ function MessageWindow({ conversation, currentUserId, onRead }) {
         </div>
       </div>
 
+      {!connected && (
+        <p className="bg-red-50 text-red-700 text-sm px-5 py-2">
+          Connection lost. Reconnecting...
+        </p>
+      )}
+
       {otherInactive && (
         <p className="bg-yellow-50 text-yellow-800 text-sm px-5 py-2">
           This user is no longer active, so you can't send them new messages.
@@ -123,7 +222,7 @@ function MessageWindow({ conversation, currentUserId, onRead }) {
           <p className="text-sm text-red-600">{error}</p>
         ) : messages.length === 0 ? (
           <p className="text-sm text-gray-500 text-center mt-8">
-            No messages yet. Messages you exchange will appear here.
+            No messages yet. Say hello!
           </p>
         ) : (
           <>
@@ -183,23 +282,33 @@ function MessageWindow({ conversation, currentUserId, onRead }) {
         )}
       </div>
 
-      {/* Input (live sending arrives on Day 3) */}
-      <div className="border-t border-gray-200 p-4 flex gap-3">
-        <input
-          type="text"
-          disabled
-          placeholder="Sending messages is coming next..."
-          className="flex-1 border border-gray-300 rounded-md px-3 py-2 bg-gray-100 text-gray-500"
-        />
-        <button
-          disabled
-          className="bg-blue-600 text-white font-semibold px-4 py-2 rounded-md opacity-50"
-        >
-          Send
-        </button>
-      </div>
+      {/* Input */}
+      <form onSubmit={handleSend} className="border-t border-gray-200 p-4">
+        {sendError && <p className="text-red-600 text-sm mb-2">{sendError}</p>}
+        <div className="flex gap-3">
+          <input
+            ref={inputRef}
+            type="text"
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            disabled={otherInactive}
+            maxLength={2000}
+            placeholder={
+              otherInactive ? "You can't message this user" : "Type a message..."
+            }
+            className="flex-1 border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100"
+          />
+          <button
+            type="submit"
+            disabled={!text.trim() || sending || otherInactive}
+            className="bg-blue-600 text-white font-semibold px-4 py-2 rounded-md hover:bg-blue-700 transition disabled:opacity-50"
+          >
+            {sending ? "Sending..." : "Send"}
+          </button>
+        </div>
+      </form>
     </div>
   );
 }
 
-export default MessageWindow; 
+export default MessageWindow;

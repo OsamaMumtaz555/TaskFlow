@@ -1,5 +1,7 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
+import { useSearchParams } from "react-router-dom";
 import api from "../api/api";
+import { getSocket } from "../socket";
 import Layout from "../components/Layout";
 import ConversationList from "../components/ConversationList";
 import MessageWindow from "../components/MessageWindow";
@@ -10,16 +12,29 @@ function ChatPage() {
   const [conversations, setConversations] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const [activeId, setActiveId] = useState(null);
   const [showNewChat, setShowNewChat] = useState(false);
+  const [searchParams, setSearchParams] = useSearchParams();
 
   const currentUser = getCurrentUser();
+  const myId = currentUser?._id;
+
+  // The socket handler needs the latest list without re-subscribing on every change
+  const conversationsRef = useRef([]);
+  useEffect(() => {
+    conversationsRef.current = conversations;
+  }, [conversations]);
+
+  const fetchChats = async () => {
+    const { data } = await api.get("/chats");
+    setConversations(data);
+  };
 
   useEffect(() => {
-    const fetchChats = async () => {
+    const load = async () => {
       try {
-        const { data } = await api.get("/chats");
-        setConversations(data);
+        await fetchChats();
       } catch (err) {
         console.error("Failed to load chats:", err);
         setError("Could not load your chats");
@@ -27,8 +42,57 @@ function ChatPage() {
         setLoading(false);
       }
     };
-    fetchChats();
+    load();
   }, []);
+
+  // Live updates for the conversation list
+  useEffect(() => {
+    const socket = getSocket();
+    if (!socket) return;
+
+    const refetch = () =>
+      fetchChats().catch((err) => console.error("Failed to refresh chats:", err));
+
+    const onNewMessage = (message) => {
+      const fromMe = message.sender._id === myId;
+      const isOpen = message.conversation === activeId;
+
+      // A teammate started a brand-new conversation with me: load the list again
+      if (!conversationsRef.current.some((c) => c._id === message.conversation)) {
+        refetch();
+        return;
+      }
+
+      setConversations((prev) =>
+        prev
+          .map((c) =>
+            c._id === message.conversation
+              ? {
+                  ...c,
+                  lastMessage: {
+                    text: message.text.slice(0, 100),
+                    sender: message.sender._id,
+                    sentAt: message.createdAt,
+                  },
+                  lastMessageAt: message.createdAt,
+                  // not mine and not the one I'm looking at: count it as unread
+                  unreadCount:
+                    fromMe || isOpen ? c.unreadCount : c.unreadCount + 1,
+                }
+              : c
+          )
+          .sort((a, b) => new Date(b.lastMessageAt) - new Date(a.lastMessageAt))
+      );
+    };
+
+    socket.on("message:new", onNewMessage);
+    socket.io.on("reconnect", refetch); // catch up on anything missed while offline
+
+    return () => {
+      socket.off("message:new", onNewMessage);
+      socket.io.off("reconnect", refetch);
+    };
+  }, [activeId, myId]);
 
   const activeConversation =
     conversations.find((c) => c._id === activeId) || null;
@@ -42,6 +106,25 @@ function ChatPage() {
     setActiveId(data._id);
     setShowNewChat(false);
   };
+
+  // Arrived from the Team page via /chat?user=<id>
+  const startWith = searchParams.get("user");
+  useEffect(() => {
+    if (!startWith || loading) return; // wait until the list has loaded
+
+    const start = async () => {
+      try {
+        await handleStartChat(startWith);
+      } catch (err) {
+        console.error("Failed to start chat:", err);
+        setNotice(err.response?.data?.message || "Could not start the chat");
+      } finally {
+        setSearchParams({}, { replace: true }); // clean the URL
+      }
+    };
+    start();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [startWith, loading]);
 
   // Called by the message window once messages were marked as read
   const handleRead = (conversationId) => {
@@ -63,9 +146,12 @@ function ChatPage() {
             <ConversationList
               conversations={conversations}
               activeId={activeId}
-              currentUserId={currentUser?._id}
+              currentUserId={myId}
               loading={loading}
-              onSelect={setActiveId}
+              onSelect={(id) => {
+                setNotice("");
+                setActiveId(id);
+              }}
               onNewChat={() => setShowNewChat(true)}
             />
           )}
@@ -76,12 +162,13 @@ function ChatPage() {
             <MessageWindow
               key={activeConversation._id}
               conversation={activeConversation}
-              currentUserId={currentUser?._id}
+              currentUserId={myId}
               onRead={handleRead}
             />
           ) : (
-            <div className="h-full flex items-center justify-center text-gray-500">
-              Select a conversation or start a new chat.
+            <div className="h-full flex flex-col items-center justify-center text-gray-500 gap-2">
+              {notice && <p className="text-red-600 text-sm">{notice}</p>}
+              <p>Select a conversation or start a new chat.</p>
             </div>
           )}
         </div>
@@ -89,7 +176,7 @@ function ChatPage() {
 
       {showNewChat && (
         <NewChatModal
-          currentUserId={currentUser?._id}
+          currentUserId={myId}
           onClose={() => setShowNewChat(false)}
           onPick={handleStartChat}
         />

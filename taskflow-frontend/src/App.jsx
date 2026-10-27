@@ -1,5 +1,6 @@
 import { useEffect } from "react";
-import { Routes, Route } from "react-router-dom";
+import { Routes, Route, useLocation } from "react-router-dom";
+import { getSocket } from "./socket";
 import api from "./api/api";
 import { getCurrentUser, saveCurrentUser } from "./utils/taskHelpers";
 import LoginPage from "./pages/LoginPage";
@@ -7,10 +8,15 @@ import DashboardPage from "./pages/DashboardPage";
 import TasksPage from "./pages/TasksPage";
 import ChatPage from "./pages/ChatPage";
 import TeamPage from "./pages/TeamPage";
-import SettingsPage from "./pages/SettingsPage";
+import SettingsPage from "./pages/SettingsPage"; 
 import ProtectedRoute from "./components/ProtectedRoute";
 
 function App() {
+    // Keep one socket connection alive while logged in (it closes after logout)
+  const location = useLocation();
+  useEffect(() => {
+    getSocket();
+  }, [location.pathname]);
   // Keep the saved user (name, email, role) in sync with the server.
   // Runs on first load and whenever the user comes back to this tab.
   useEffect(() => {

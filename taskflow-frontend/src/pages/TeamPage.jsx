@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import api from "../api/api";
 import Layout from "../components/Layout";
 import AddMemberModal from "../components/AddMemberModal";
@@ -27,6 +28,7 @@ function TeamPage() {
   const [showAdd, setShowAdd] = useState(false);
   const [actionError, setActionError] = useState("");
   const [busyId, setBusyId] = useState(null);
+  const navigate = useNavigate();
 
   const currentUser = getCurrentUser();
   const isAdmin = currentUser?.role === "Admin";
@@ -224,7 +226,15 @@ function TeamPage() {
                       })}
                     </span>
                   </div>
-
+                                   {!isYou && member.isActive && (
+                    <button
+                      onClick={() => navigate(`/chat?user=${member._id}`)}
+                      className="mt-3 w-full text-sm font-medium text-blue-600 border border-blue-200 rounded-md py-1.5 hover:bg-blue-50 transition"
+                    >
+                      Message
+                    </button>
+                  )}
+                  
                   {stats && (
                     <div className="grid grid-cols-3 gap-2 mt-4 pt-4 border-t border-gray-100 text-center">
                       <div>
