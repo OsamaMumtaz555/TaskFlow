@@ -10,7 +10,10 @@ import {
 
 const PAGE_SIZE = 30;
 
-function MessageWindow({ conversation, currentUserId, onRead }) {
+// Tells the sidebar to refresh its unread badge
+const announceRead = () => window.dispatchEvent(new Event("chat:read"));
+
+function MessageWindow({ conversation, currentUserId, isOnline, isTyping, onRead }) {
   const [messages, setMessages] = useState([]);
   const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -27,6 +30,56 @@ function MessageWindow({ conversation, currentUserId, onRead }) {
   // What to do with the scrollbar after the next render:
   // "bottom" (show newest) or { restoreFrom } (keep position after loading older)
   const pendingScroll = useRef("bottom");
+  // Typing state: are we currently "typing", when did we last tell the server, stop timer
+  const typingRef = useRef({ active: false, lastEmit: 0, timer: null });
+
+  // ---- Typing events (sent to the other person) ----
+  const emitTyping = (isTypingNow) => {
+    const socket = getSocket();
+    if (socket?.connected) {
+      socket.emit("typing", {
+        conversationId: conversation._id,
+        isTyping: isTypingNow,
+      });
+    }
+  };
+
+  const stopTyping = () => {
+    const t = typingRef.current;
+    clearTimeout(t.timer);
+    if (t.active) {
+      t.active = false;
+      emitTyping(false);
+    }
+  };
+
+  const handleChange = (e) => {
+    const value = e.target.value;
+    setText(value);
+
+    const t = typingRef.current;
+    if (!value.trim()) {
+      stopTyping();
+      return;
+    }
+
+    const now = Date.now();
+    // tell the server when we start, and repeat every 3 seconds while typing
+    if (!t.active || now - t.lastEmit > 3000) {
+      t.active = true;
+      t.lastEmit = now;
+      emitTyping(true);
+    }
+
+    clearTimeout(t.timer);
+    t.timer = setTimeout(stopTyping, 2000); // 2 seconds without typing = stopped
+  };
+
+  // leaving the conversation = stop typing
+  useEffect(() => {
+    return () => stopTyping();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Load the latest messages, then mark them as read
   useEffect(() => {
@@ -45,6 +98,7 @@ function MessageWindow({ conversation, currentUserId, onRead }) {
           try {
             await api.put(`/chats/${conversation._id}/read`);
             if (!cancelled) onRead(conversation._id);
+            announceRead();
           } catch (err) {
             console.error("Failed to mark as read:", err);
           }
@@ -92,9 +146,10 @@ function MessageWindow({ conversation, currentUserId, onRead }) {
 
       // I'm looking at this conversation, so it counts as read
       if (!mine) {
-        api.put(`/chats/${conversation._id}/read`).catch((err) => {
-          console.error("Failed to mark as read:", err);
-        });
+        api
+          .put(`/chats/${conversation._id}/read`)
+          .then(announceRead)
+          .catch((err) => console.error("Failed to mark as read:", err));
       }
     };
 
@@ -157,6 +212,7 @@ function MessageWindow({ conversation, currentUserId, onRead }) {
       return;
     }
 
+    stopTyping();
     setSending(true);
     setSendError("");
 
@@ -189,15 +245,23 @@ function MessageWindow({ conversation, currentUserId, onRead }) {
     <div className="flex flex-col h-full">
       {/* Header */}
       <div className="px-5 py-3 border-b border-gray-200 flex items-center gap-3">
-        <div className="w-10 h-10 rounded-full bg-blue-600 text-white flex items-center justify-center font-semibold shrink-0">
-          {initials(other?.name)}
+        <div className="relative shrink-0">
+          <div className="w-10 h-10 rounded-full bg-blue-600 text-white flex items-center justify-center font-semibold">
+            {initials(other?.name)}
+          </div>
+          {isOnline && (
+            <span className="absolute bottom-0 right-0 w-3 h-3 rounded-full bg-green-500 border-2 border-white" />
+          )}
         </div>
         <div className="min-w-0">
           <p className="font-semibold text-gray-800 truncate">
             {other?.name || "Unknown user"}
           </p>
           <p className="text-xs text-gray-500 truncate">
-            {other?.role} · {other?.email}
+            <span className={isOnline ? "text-green-600 font-medium" : ""}>
+              {isOnline ? "Online" : "Offline"}
+            </span>{" "}
+            · {other?.role} · {other?.email}
           </p>
         </div>
       </div>
@@ -282,6 +346,11 @@ function MessageWindow({ conversation, currentUserId, onRead }) {
         )}
       </div>
 
+      {/* Typing indicator */}
+      <div className="px-5 h-5 text-xs text-gray-500 italic">
+        {isTyping && `${other?.name || "Someone"} is typing...`}
+      </div>
+
       {/* Input */}
       <form onSubmit={handleSend} className="border-t border-gray-200 p-4">
         {sendError && <p className="text-red-600 text-sm mb-2">{sendError}</p>}
@@ -290,7 +359,7 @@ function MessageWindow({ conversation, currentUserId, onRead }) {
             ref={inputRef}
             type="text"
             value={text}
-            onChange={(e) => setText(e.target.value)}
+            onChange={handleChange}
             disabled={otherInactive}
             maxLength={2000}
             placeholder={

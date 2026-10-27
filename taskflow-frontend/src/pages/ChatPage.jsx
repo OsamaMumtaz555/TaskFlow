@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { useSearchParams } from "react-router-dom";
 import api from "../api/api";
 import { getSocket } from "../socket";
+import usePresence from "../hooks/usePresence";
 import Layout from "../components/Layout";
 import ConversationList from "../components/ConversationList";
 import MessageWindow from "../components/MessageWindow";
@@ -15,8 +16,10 @@ function ChatPage() {
   const [notice, setNotice] = useState("");
   const [activeId, setActiveId] = useState(null);
   const [showNewChat, setShowNewChat] = useState(false);
+  const [typingIds, setTypingIds] = useState({}); // conversationId -> true
   const [searchParams, setSearchParams] = useSearchParams();
 
+  const onlineIds = usePresence();
   const currentUser = getCurrentUser();
   const myId = currentUser?._id;
 
@@ -25,6 +28,8 @@ function ChatPage() {
   useEffect(() => {
     conversationsRef.current = conversations;
   }, [conversations]);
+
+  const typingTimers = useRef({});
 
   const fetchChats = async () => {
     const { data } = await api.get("/chats");
@@ -45,6 +50,40 @@ function ChatPage() {
     load();
   }, []);
 
+  const clearTyping = (conversationId) => {
+    clearTimeout(typingTimers.current[conversationId]);
+    setTypingIds((prev) => {
+      if (!prev[conversationId]) return prev;
+      const next = { ...prev };
+      delete next[conversationId];
+      return next;
+    });
+  };
+
+  // Typing indicators from the other person
+  useEffect(() => {
+    const socket = getSocket();
+    if (!socket) return;
+    const timers = typingTimers.current;
+
+    const onTyping = ({ conversationId, isTyping }) => {
+      if (!isTyping) {
+        clearTyping(conversationId);
+        return;
+      }
+      setTypingIds((prev) => ({ ...prev, [conversationId]: true }));
+      // safety net: if the "stopped typing" event never arrives, hide it after 5s
+      clearTimeout(timers[conversationId]);
+      timers[conversationId] = setTimeout(() => clearTyping(conversationId), 5000);
+    };
+
+    socket.on("typing", onTyping);
+    return () => {
+      socket.off("typing", onTyping);
+      Object.values(timers).forEach(clearTimeout);
+    };
+  }, []);
+
   // Live updates for the conversation list
   useEffect(() => {
     const socket = getSocket();
@@ -56,6 +95,8 @@ function ChatPage() {
     const onNewMessage = (message) => {
       const fromMe = message.sender._id === myId;
       const isOpen = message.conversation === activeId;
+
+      if (!fromMe) clearTyping(message.conversation); // they sent it, so they stopped typing
 
       // A teammate started a brand-new conversation with me: load the list again
       if (!conversationsRef.current.some((c) => c._id === message.conversation)) {
@@ -148,6 +189,8 @@ function ChatPage() {
               activeId={activeId}
               currentUserId={myId}
               loading={loading}
+              onlineIds={onlineIds}
+              typingIds={typingIds}
               onSelect={(id) => {
                 setNotice("");
                 setActiveId(id);
@@ -163,6 +206,8 @@ function ChatPage() {
               key={activeConversation._id}
               conversation={activeConversation}
               currentUserId={myId}
+              isOnline={onlineIds.has(activeConversation.other?._id)}
+              isTyping={Boolean(typingIds[activeConversation._id])}
               onRead={handleRead}
             />
           ) : (

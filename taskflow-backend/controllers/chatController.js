@@ -64,6 +64,25 @@ const getChats = async (req, res) => {
   }
 };
 
+// GET /api/chats/unread-count — total unread messages across all my conversations
+const getUnreadCount = async (req, res) => {
+  try {
+    const conversationIds = await Conversation.distinct('_id', {
+      participants: req.user._id,
+    });
+
+    const count = await Message.countDocuments({
+      conversation: { $in: conversationIds },
+      sender: { $ne: req.user._id },
+      readAt: null,
+    });
+
+    res.json({ count });
+  } catch (error) {
+    res.status(500).json({ message: 'Error fetching unread count', error: error.message });
+  }
+};
+
 // POST /api/chats  { userId } — open (or create) my conversation with that user
 const startChat = async (req, res) => {
   try {
@@ -160,4 +179,10 @@ const markConversationRead = async (req, res) => {
   }
 };
 
-module.exports = { getChats, startChat, getMessages, markConversationRead };
+module.exports = {
+  getChats,
+  getUnreadCount,
+  startChat,
+  getMessages,
+  markConversationRead,
+};
