@@ -43,7 +43,7 @@ const updateMe = async (req, res) => {
     }
 
     if (email !== undefined) {
-      const cleanEmail = String(email).trim();
+      const cleanEmail = String(email).trim().toLowerCase(); 
       if (!cleanEmail) {
         return res.status(400).json({ message: 'Email cannot be empty' });
       }
@@ -119,7 +119,7 @@ const createUser = async (req, res) => {
       return res.status(400).json({ message: 'Role must be Admin or Member' });
     }
 
-    const cleanEmail = email.trim();
+    const cleanEmail = email.trim().toLowerCase();
     const exists = await User.findOne({ email: cleanEmail });
     if (exists) {
       return res.status(400).json({ message: 'User already exists' });

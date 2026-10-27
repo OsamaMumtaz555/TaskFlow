@@ -11,10 +11,13 @@ const userSchema = new mongoose.Schema({
     type: String,
     required: true,
     unique: true, // no two users can have the same email
+    lowercase: true, // always stored in lowercase
+    trim: true,
   },
   password: {
     type: String,
     required: true,
+    minlength: 6, // minimum password length
   },
   role: {
     type: String,

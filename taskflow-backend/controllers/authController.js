@@ -4,7 +4,15 @@ const generateToken = require('../utils/generateToken');
 // REGISTER — create a new user
 const registerUser = async (req, res) => {
   try {
-    const { name, email, password } = req.body; // role is no longer read from the client
+    const { name, password } = req.body; // role is never read from the client
+    const email = req.body.email?.trim().toLowerCase();
+
+    if (!name?.trim() || !email || !password) {
+      return res.status(400).json({ message: 'Name, email and password are required' });
+    }
+    if (password.length < 8) {
+      return res.status(400).json({ message: 'Password must be at least 8 characters' });
+    }
 
     // Check if a user with this email already exists
     const userExists = await User.findOne({ email });
@@ -12,11 +20,9 @@ const registerUser = async (req, res) => {
       return res.status(400).json({ message: 'User already exists' });
     }
 
-    // Create the new user (password gets hashed automatically by our pre('save') middleware)
     // role is not passed, so the schema default 'Member' always applies
-    const user = await User.create({ name, email, password });
+    const user = await User.create({ name: name.trim(), email, password });
 
-    // Respond with user info + a token, so they're immediately logged in after registering
     res.status(201).json({
       _id: user._id,
       name: user.name,
@@ -32,7 +38,12 @@ const registerUser = async (req, res) => {
 // LOGIN — verify credentials and return a token
 const loginUser = async (req, res) => {
   try {
-    const { email, password } = req.body;
+    const { password } = req.body;
+    const email = req.body.email?.trim().toLowerCase();
+
+    if (!email || !password) {
+      return res.status(401).json({ message: 'Invalid email or password' });
+    }
 
     // Find the user by email
     const user = await User.findOne({ email });
@@ -45,9 +56,12 @@ const loginUser = async (req, res) => {
     if (!isMatch) {
       return res.status(401).json({ message: 'Invalid email or password' });
     }
-    // NEW: deactivated accounts cannot log in
+
+    // Deactivated accounts cannot log in
     if (user.isActive === false) {
-      return res.status(403).json({ message: 'Your account has been deactivated. Contact an administrator.' });
+      return res
+        .status(403)
+        .json({ message: 'Your account has been deactivated. Contact an administrator.' });
     }
 
     // Credentials correct — send back user info + token
