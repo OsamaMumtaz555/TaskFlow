@@ -26,5 +26,9 @@ export const getSocket = () => {
 
   disconnectSocket();
   socket = io(SOCKET_URL, { auth: { token } });
+
+  // Dev only: lets you simulate a dropped connection from the browser console
+  if (import.meta.env.DEV) window.__socket = socket;
+
   return socket;
 }; 

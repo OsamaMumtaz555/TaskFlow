@@ -13,6 +13,10 @@ const PAGE_SIZE = 30;
 // Tells the sidebar to refresh its unread badge
 const announceRead = () => window.dispatchEvent(new Event("chat:read"));
 
+// Is the user really looking at this page right now?
+const isViewing = () =>
+  document.visibilityState === "visible" && document.hasFocus();
+
 function MessageWindow({ conversation, currentUserId, isOnline, isTyping, onRead }) {
   const [messages, setMessages] = useState([]);
   const [hasMore, setHasMore] = useState(false);
@@ -32,6 +36,23 @@ function MessageWindow({ conversation, currentUserId, isOnline, isTyping, onRead
   const pendingScroll = useRef("bottom");
   // Typing state: are we currently "typing", when did we last tell the server, stop timer
   const typingRef = useRef({ active: false, lastEmit: 0, timer: null });
+  // A message arrived while the tab was hidden and still has to be marked as read
+  const unseenRef = useRef(false);
+  // The latest messages, readable from event handlers without stale values
+  const messagesRef = useRef([]);
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
+
+  // Mark this conversation as read on the server and update the badges
+  const markAsRead = () =>
+    api
+      .put(`/chats/${conversation._id}/read`)
+      .then(() => {
+        onRead(conversation._id);
+        announceRead();
+      })
+      .catch((err) => console.error("Failed to mark as read:", err));
 
   // ---- Typing events (sent to the other person) ----
   const emitTyping = (isTypingNow) => {
@@ -95,12 +116,10 @@ function MessageWindow({ conversation, currentUserId, isOnline, isTyping, onRead
         setHasMore(data.hasMore);
 
         if (conversation.unreadCount > 0) {
-          try {
-            await api.put(`/chats/${conversation._id}/read`);
-            if (!cancelled) onRead(conversation._id);
-            announceRead();
-          } catch (err) {
-            console.error("Failed to mark as read:", err);
+          if (isViewing()) {
+            await markAsRead();
+          } else {
+            unseenRef.current = true;
           }
         }
       } catch (err) {
@@ -118,7 +137,7 @@ function MessageWindow({ conversation, currentUserId, isOnline, isTyping, onRead
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversation._id]);
 
-  // Live: new messages for THIS conversation + connection status
+  // Live: new messages, connection status, catching up after a reconnect
   useEffect(() => {
     const socket = getSocket();
     if (!socket) return;
@@ -144,24 +163,84 @@ function MessageWindow({ conversation, currentUserId, isOnline, isTyping, onRead
         prev.some((m) => m._id === message._id) ? prev : [...prev, message]
       );
 
-      // I'm looking at this conversation, so it counts as read
       if (!mine) {
-        api
-          .put(`/chats/${conversation._id}/read`)
-          .then(announceRead)
-          .catch((err) => console.error("Failed to mark as read:", err));
+        // only count it as read if the user can actually see it
+        if (isViewing()) markAsRead();
+        else unseenRef.current = true;
+      }
+    };
+
+    // After a dropped connection: fetch the newest messages and merge them in
+    const syncMissed = async () => {
+      try {
+        const { data } = await api.get(`/chats/${conversation._id}/messages`, {
+          params: { limit: PAGE_SIZE },
+        });
+        const known = messagesRef.current;
+        const fresh = data.messages;
+
+        const el = scrollRef.current;
+        const nearBottom = el
+          ? el.scrollHeight - el.scrollTop - el.clientHeight < 150
+          : true;
+        if (nearBottom) pendingScroll.current = "bottom";
+
+        const lastKnown = known.length
+          ? new Date(known[known.length - 1].createdAt)
+          : null;
+        const gap =
+          lastKnown &&
+          fresh.length > 0 &&
+          data.hasMore &&
+          new Date(fresh[0].createdAt) > lastKnown;
+
+        if (!lastKnown || gap) {
+          // we missed so much that the new page does not touch what we have
+          setMessages(fresh);
+          setHasMore(data.hasMore);
+        } else {
+          const merged = new Map(known.map((m) => [m._id, m]));
+          fresh.forEach((m) => merged.set(m._id, m));
+          setMessages(
+            [...merged.values()].sort(
+              (a, b) => new Date(a.createdAt) - new Date(b.createdAt)
+            )
+          );
+        }
+
+        if (fresh.some((m) => m.sender._id !== currentUserId && !m.readAt)) {
+          if (isViewing()) markAsRead();
+          else unseenRef.current = true;
+        }
+      } catch (err) {
+        console.error("Failed to catch up after reconnecting:", err);
+      }
+    };
+
+    // The user came back to this tab: now the unseen messages count as read
+    const onBackToTab = () => {
+      if (unseenRef.current && isViewing()) {
+        unseenRef.current = false;
+        markAsRead();
       }
     };
 
     socket.on("connect", onConnect);
     socket.on("disconnect", onDisconnect);
     socket.on("message:new", onNewMessage);
+    socket.io.on("reconnect", syncMissed);
+    window.addEventListener("focus", onBackToTab);
+    document.addEventListener("visibilitychange", onBackToTab);
 
     return () => {
       socket.off("connect", onConnect);
       socket.off("disconnect", onDisconnect);
       socket.off("message:new", onNewMessage);
+      socket.io.off("reconnect", syncMissed);
+      window.removeEventListener("focus", onBackToTab);
+      document.removeEventListener("visibilitychange", onBackToTab);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversation._id, currentUserId]);
 
   // Apply the scroll decision right after messages are drawn

@@ -1,8 +1,14 @@
+import { useEffect } from "react";
 import { NavLink } from "react-router-dom";
 import useUnreadCount from "../hooks/useUnreadCount";
 
 function Sidebar() {
   const unread = useUnreadCount();
+
+  // Browser tab title: "(2) TaskFlow"
+  useEffect(() => {
+    document.title = unread > 0 ? `(${unread}) TaskFlow` : "TaskFlow";
+  }, [unread]);
 
   const linkClass = ({ isActive }) =>
     `px-4 py-2 rounded-md font-medium transition flex items-center justify-between ${

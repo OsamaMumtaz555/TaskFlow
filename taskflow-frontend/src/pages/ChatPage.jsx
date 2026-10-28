@@ -94,7 +94,11 @@ function ChatPage() {
 
     const onNewMessage = (message) => {
       const fromMe = message.sender._id === myId;
-      const isOpen = message.conversation === activeId;
+      // "open" only counts if the user can actually see this tab
+      const isOpen =
+        message.conversation === activeId &&
+        document.visibilityState === "visible" &&
+        document.hasFocus();
 
       if (!fromMe) clearTyping(message.conversation); // they sent it, so they stopped typing
 

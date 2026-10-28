@@ -6,6 +6,10 @@ const {
   getConversationForUser,
 } = require('../services/chatService');
 
+// Spam guard: at most RATE_LIMIT messages per user in RATE_WINDOW_MS
+const RATE_LIMIT = 20;
+const RATE_WINDOW_MS = 10 * 1000;
+
 const initSocket = (httpServer) => {
   const io = new Server(httpServer, {
     cors: { origin: process.env.CLIENT_URL || 'http://localhost:5173' },
@@ -13,6 +17,22 @@ const initSocket = (httpServer) => {
 
   // userId -> number of open connections (one person can have several tabs)
   const onlineUsers = new Map();
+
+  // userId -> timestamps of their recent messages (shared by all their tabs)
+  const sendLog = new Map();
+  const isRateLimited = (userId) => {
+    const now = Date.now();
+    const recent = (sendLog.get(userId) || []).filter(
+      (time) => now - time < RATE_WINDOW_MS
+    );
+    if (recent.length >= RATE_LIMIT) {
+      sendLog.set(userId, recent);
+      return true;
+    }
+    recent.push(now);
+    sendLog.set(userId, recent);
+    return false;
+  };
 
   // Runs once for every new connection: same JWT as the REST API
   io.use(async (socket, next) => {
@@ -57,6 +77,13 @@ const initSocket = (httpServer) => {
     socket.on('message:send', async (payload, ack) => {
       const reply = typeof ack === 'function' ? ack : () => {};
       try {
+        if (isRateLimited(userId)) {
+          return reply({
+            ok: false,
+            error: 'You are sending messages too fast. Please slow down.',
+          });
+        }
+
         const { conversationId, text } = payload || {};
         const { message, conversation } = await saveMessage({
           conversationId,
