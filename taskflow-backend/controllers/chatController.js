@@ -2,7 +2,7 @@ const mongoose = require('mongoose');
 const Conversation = require('../models/Conversation');
 const Message = require('../models/Message');
 const User = require('../models/User');
-const { getConversationForUser, markRead } = require('../services/chatService');
+const { messagePopulate, getConversationForUser, markRead,} = require('../services/chatService');
 
 // Shape sent to the frontend: the OTHER person, a preview and the unread count
 const formatConversation = (conv, myId, unreadCount = 0) => {
@@ -155,7 +155,7 @@ const getMessages = async (req, res) => {
     const found = await Message.find(filter)
       .sort({ createdAt: -1 })
       .limit(limit + 1)
-      .populate('sender', 'name');
+      .populate(messagePopulate);
 
     const hasMore = found.length > limit;
     const messages = found.slice(0, limit).reverse();

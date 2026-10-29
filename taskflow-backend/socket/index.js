@@ -84,11 +84,12 @@ const initSocket = (httpServer) => {
           });
         }
 
-        const { conversationId, text } = payload || {};
+        const { conversationId, text, taskId } = payload || {};
         const { message, conversation } = await saveMessage({
           conversationId,
           senderId: userId,
           text,
+          taskId,
         });
 
         // push to both people (the sender's other tabs included)

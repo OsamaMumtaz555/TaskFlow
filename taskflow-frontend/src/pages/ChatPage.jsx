@@ -115,7 +115,7 @@ function ChatPage() {
               ? {
                   ...c,
                   lastMessage: {
-                    text: message.text.slice(0, 100),
+                text: (message.text || `📎 ${message.taskTitle}`).slice(0, 100),
                     sender: message.sender._id,
                     sentAt: message.createdAt,
                   },

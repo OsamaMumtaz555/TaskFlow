@@ -1,6 +1,9 @@
 import { useState, useEffect, useRef, useLayoutEffect } from "react";
 import api from "../api/api";
 import { getSocket } from "../socket";
+import SharedTaskCard from "./SharedTaskCard";
+import TaskDetailModal from "./TaskDetailModal";
+import TaskPickerModal from "./TaskPickerModal";
 import {
   initials,
   formatTime,
@@ -28,6 +31,9 @@ function MessageWindow({ conversation, currentUserId, isOnline, isTyping, onRead
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState("");
   const [connected, setConnected] = useState(true);
+
+  const [showPicker, setShowPicker] = useState(false);
+  const [openTaskId, setOpenTaskId] = useState(null);
 
   const scrollRef = useRef(null);
   const inputRef = useRef(null);
@@ -137,7 +143,7 @@ function MessageWindow({ conversation, currentUserId, isOnline, isTyping, onRead
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversation._id]);
 
-  // Live: new messages, connection status, catching up after a reconnect
+  // Live: new messages, task card updates, connection status, reconnect catch-up
   useEffect(() => {
     const socket = getSocket();
     if (!socket) return;
@@ -169,6 +175,22 @@ function MessageWindow({ conversation, currentUserId, isOnline, isTyping, onRead
         else unseenRef.current = true;
       }
     };
+
+    // A shared task changed: refresh every card that shows it
+    const onTaskUpdated = (summary) =>
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.task && m.task._id === summary._id ? { ...m, task: summary } : m
+        )
+      );
+
+    // A shared task was deleted: its cards switch to "no longer available"
+    const onTaskDeleted = ({ taskId }) =>
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.task && m.task._id === taskId ? { ...m, task: null } : m
+        )
+      );
 
     // After a dropped connection: fetch the newest messages and merge them in
     const syncMissed = async () => {
@@ -228,6 +250,8 @@ function MessageWindow({ conversation, currentUserId, isOnline, isTyping, onRead
     socket.on("connect", onConnect);
     socket.on("disconnect", onDisconnect);
     socket.on("message:new", onNewMessage);
+    socket.on("task:updated", onTaskUpdated);
+    socket.on("task:deleted", onTaskDeleted);
     socket.io.on("reconnect", syncMissed);
     window.addEventListener("focus", onBackToTab);
     document.addEventListener("visibilitychange", onBackToTab);
@@ -236,6 +260,8 @@ function MessageWindow({ conversation, currentUserId, isOnline, isTyping, onRead
       socket.off("connect", onConnect);
       socket.off("disconnect", onDisconnect);
       socket.off("message:new", onNewMessage);
+      socket.off("task:updated", onTaskUpdated);
+      socket.off("task:deleted", onTaskDeleted);
       socket.io.off("reconnect", syncMissed);
       window.removeEventListener("focus", onBackToTab);
       document.removeEventListener("visibilitychange", onBackToTab);
@@ -280,10 +306,10 @@ function MessageWindow({ conversation, currentUserId, isOnline, isTyping, onRead
     }
   };
 
-  const handleSend = (e) => {
-    e.preventDefault();
+  // One function for both plain messages and shared tasks (the text is an optional note)
+  const sendMessage = (taskId) => {
     const clean = text.trim();
-    if (!clean || sending) return;
+    if ((!clean && !taskId) || sending) return;
 
     const socket = getSocket();
     if (!socket || !socket.connected) {
@@ -300,7 +326,7 @@ function MessageWindow({ conversation, currentUserId, isOnline, isTyping, onRead
       .timeout(8000)
       .emit(
         "message:send",
-        { conversationId: conversation._id, text: clean },
+        { conversationId: conversation._id, text: clean, taskId },
         (err, reply) => {
           setSending(false);
           if (err) {
@@ -315,6 +341,16 @@ function MessageWindow({ conversation, currentUserId, isOnline, isTyping, onRead
           inputRef.current?.focus();
         }
       );
+  };
+
+  const handleSend = (e) => {
+    e.preventDefault();
+    sendMessage();
+  };
+
+  const handleShareTask = (task) => {
+    setShowPicker(false);
+    sendMessage(task._id);
   };
 
   const other = conversation.other;
@@ -401,14 +437,27 @@ function MessageWindow({ conversation, currentUserId, isOnline, isTyping, onRead
                   >
                     <div
                       className={`max-w-[70%] px-4 py-2 rounded-2xl ${
+                        message.taskTitle ? "min-w-[16rem]" : ""
+                      } ${
                         mine
                           ? "bg-blue-600 text-white rounded-br-sm"
                           : "bg-gray-100 text-gray-800 rounded-bl-sm"
                       }`}
                     >
-                      <p className="whitespace-pre-wrap break-words">
-                        {message.text}
-                      </p>
+                      {message.text && (
+                        <p className="whitespace-pre-wrap break-words">
+                          {message.text}
+                        </p>
+                      )}
+
+                      {message.taskTitle && (
+                        <SharedTaskCard
+                          task={message.task}
+                          title={message.taskTitle}
+                          onOpen={setOpenTaskId}
+                        />
+                      )}
+
                       <p
                         className={`text-[11px] mt-1 text-right ${
                           mine ? "text-blue-100" : "text-gray-400"
@@ -434,6 +483,14 @@ function MessageWindow({ conversation, currentUserId, isOnline, isTyping, onRead
       <form onSubmit={handleSend} className="border-t border-gray-200 p-4">
         {sendError && <p className="text-red-600 text-sm mb-2">{sendError}</p>}
         <div className="flex gap-3">
+          <button
+            type="button"
+            onClick={() => setShowPicker(true)}
+            disabled={otherInactive || sending}
+            className="px-3 py-2 rounded-md border border-gray-300 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 shrink-0"
+          >
+            Share task
+          </button>
           <input
             ref={inputRef}
             type="text"
@@ -455,6 +512,20 @@ function MessageWindow({ conversation, currentUserId, isOnline, isTyping, onRead
           </button>
         </div>
       </form>
+
+      {showPicker && (
+        <TaskPickerModal
+          onClose={() => setShowPicker(false)}
+          onPick={handleShareTask}
+        />
+      )}
+
+      {openTaskId && (
+        <TaskDetailModal
+          taskId={openTaskId}
+          onClose={() => setOpenTaskId(null)}
+        />
+      )}
     </div>
   );
 }

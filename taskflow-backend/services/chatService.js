@@ -1,7 +1,18 @@
 const mongoose = require('mongoose');
 const Conversation = require('../models/Conversation');
 const Message = require('../models/Message');
+const Task = require('../models/Task');
 const User = require('../models/User');
+
+// What a message shows about its sender and a shared task (a summary, not the whole task)
+const messagePopulate = [
+  { path: 'sender', select: 'name' },
+  {
+    path: 'task',
+    select: 'title status priority dueDate assignedTo',
+    populate: { path: 'assignedTo', select: 'name' },
+  },
+];
 
 // Returns the conversation only if this user is one of its two participants
 const getConversationForUser = async (conversationId, userId) => {
@@ -10,10 +21,28 @@ const getConversationForUser = async (conversationId, userId) => {
 };
 
 // Validates, saves a message and updates the conversation preview
-const saveMessage = async ({ conversationId, senderId, text }) => {
+const saveMessage = async ({ conversationId, senderId, text, taskId }) => {
   const clean = typeof text === 'string' ? text.trim() : '';
-  if (!clean) throw new Error('Message cannot be empty');
   if (clean.length > 2000) throw new Error('Message is too long (max 2000 characters)');
+
+  // Sharing a task: you may only share a task you can see yourself
+  let task = null;
+  if (taskId) {
+    if (!mongoose.Types.ObjectId.isValid(taskId)) throw new Error('Task not found');
+    task = await Task.findById(taskId);
+    if (!task) throw new Error('Task not found');
+
+    const sender = await User.findById(senderId).select('role');
+    const isAdmin = sender?.role === 'Admin';
+    const isCreator = task.createdBy && task.createdBy.toString() === senderId.toString();
+    const isAssignee = task.assignedTo && task.assignedTo.toString() === senderId.toString();
+
+    if (!isAdmin && !isCreator && !isAssignee) {
+      throw new Error('You can only share tasks you have access to');
+    }
+  }
+
+  if (!clean && !task) throw new Error('Message cannot be empty');
 
   const conversation = await getConversationForUser(conversationId, senderId);
   if (!conversation) throw new Error('Conversation not found');
@@ -31,17 +60,19 @@ const saveMessage = async ({ conversationId, senderId, text }) => {
     conversation: conversation._id,
     sender: senderId,
     text: clean,
+    task: task ? task._id : null,
+    taskTitle: task ? task.title : undefined,
   });
 
   conversation.lastMessage = {
-    text: clean.slice(0, 100),
+    text: (clean || `📎 ${task.title}`).slice(0, 100),
     sender: senderId,
     sentAt: message.createdAt,
   };
   conversation.lastMessageAt = message.createdAt;
   await conversation.save();
 
-  await message.populate('sender', 'name');
+  await message.populate(messagePopulate);
   return { message: message.toObject(), conversation };
 };
 
@@ -57,4 +88,9 @@ const markRead = async (conversationId, userId) => {
   return { conversation, updated: result.modifiedCount };
 };
 
-module.exports = { getConversationForUser, saveMessage, markRead };
+module.exports = {
+  messagePopulate,
+  getConversationForUser,
+  saveMessage,
+  markRead,
+};

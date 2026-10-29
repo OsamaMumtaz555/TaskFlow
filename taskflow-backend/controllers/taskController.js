@@ -2,6 +2,13 @@
 const mongoose = require('mongoose');
 const Task = require('../models/Task');
 const User = require('../models/User');
+const Conversation = require('../models/Conversation');
+const Message = require('../models/Message');
+const {
+  getRecipientIds,
+  emitToUsers,
+  emitTaskUpdated,
+} = require('../services/taskEvents');
 
 // helper: fill in creator/assignee names on a task
 const populateTask = (task) =>
@@ -10,7 +17,7 @@ const populateTask = (task) =>
     { path: 'assignedTo', select: 'name email' },
   ]);
 
-// helper: an assignee is valid if empty (unassigned) or an existing user
+// helper: an assignee is valid if empty (unassigned) or an existing active user
 const assigneeIsValid = async (id) => {
   if (!id) return true;
   if (!mongoose.Types.ObjectId.isValid(id)) return false;
@@ -33,6 +40,46 @@ const getAllTasks = async (req, res) => {
     res.json(tasks);
   } catch (error) {
     res.status(500).json({ message: 'Error fetching tasks', error: error.message });
+  }
+};
+
+// GET one task — Admin, creator, assignee, OR someone it was shared with in a chat
+const getTaskById = async (req, res) => {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(404).json({ message: 'Task not found' });
+    }
+
+    const task = await Task.findById(req.params.id)
+      .populate('createdBy', 'name email')
+      .populate('assignedTo', 'name email');
+    if (!task) {
+      return res.status(404).json({ message: 'Task not found' });
+    }
+
+    const userId = req.user._id.toString();
+    const isAdmin = req.user.role === 'Admin';
+    const isCreator = task.createdBy && task.createdBy._id.toString() === userId;
+    const isAssignee = task.assignedTo && task.assignedTo._id.toString() === userId;
+    const hasAccess = isAdmin || isCreator || isAssignee;
+
+    if (!hasAccess) {
+      // Not mine: only visible if it was shared in one of MY conversations
+      const myConversationIds = await Conversation.distinct('_id', {
+        participants: req.user._id,
+      });
+      const shared = await Message.exists({
+        task: task._id,
+        conversation: { $in: myConversationIds },
+      });
+      if (!shared) {
+        return res.status(403).json({ message: 'You are not allowed to view this task' });
+      }
+    }
+
+    res.json({ ...task.toObject(), readOnly: !hasAccess });
+  } catch (error) {
+    res.status(500).json({ message: 'Error fetching task', error: error.message });
   }
 };
 
@@ -107,6 +154,10 @@ const updateTask = async (req, res) => {
 
     await task.save(); // runs schema validation
     await populateTask(task);
+
+    // live update for shared task cards in chat
+    await emitTaskUpdated(req.app.get('io'), task);
+
     res.json(task);
   } catch (error) {
     res.status(400).json({ message: 'Error updating task', error: error.message });
@@ -129,11 +180,17 @@ const deleteTask = async (req, res) => {
       return res.status(403).json({ message: 'You are not allowed to delete this task' });
     }
 
+    // work out who to tell BEFORE the task disappears
+    const recipients = await getRecipientIds(task);
     await task.deleteOne();
+    emitToUsers(req.app.get('io'), recipients, 'task:deleted', {
+      taskId: task._id.toString(),
+    });
+
     res.json({ message: 'Task deleted successfully' });
   } catch (error) {
     res.status(500).json({ message: 'Error deleting task', error: error.message });
   }
 };
 
-module.exports = { getAllTasks, createTask, updateTask, deleteTask };
+module.exports = { getAllTasks, getTaskById, createTask, updateTask, deleteTask };
