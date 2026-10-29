@@ -86,10 +86,38 @@ const getTaskById = async (req, res) => {
 // POST — create a new task in the database
 const createTask = async (req, res) => {
   try {
-    const { title, description, status, priority, dueDate, assignedTo } = req.body;
+    const {
+      title,
+      description,
+      status,
+      priority,
+      dueDate,
+      assignedTo,
+      sourceMessageId,
+    } = req.body;
 
     if (!(await assigneeIsValid(assignedTo))) {
       return res.status(400).json({ message: 'Assigned user does not exist' });
+    }
+
+    // Optional: the chat message this task was created from.
+    // I must be one of the two people in that conversation.
+    let sourceMessage = null;
+    if (sourceMessageId) {
+      if (!mongoose.Types.ObjectId.isValid(sourceMessageId)) {
+        return res.status(400).json({ message: 'Invalid source message' });
+      }
+      const message = await Message.findById(sourceMessageId).select('conversation');
+      const allowed =
+        message &&
+        (await Conversation.exists({
+          _id: message.conversation,
+          participants: req.user._id,
+        }));
+      if (!allowed) {
+        return res.status(400).json({ message: 'Invalid source message' });
+      }
+      sourceMessage = message._id;
     }
 
     const newTask = await Task.create({
@@ -99,6 +127,7 @@ const createTask = async (req, res) => {
       priority,
       dueDate,
       assignedTo: assignedTo || null,
+      sourceMessage,
       createdBy: req.user._id, // always taken from the verified token, never from the client
     });
 

@@ -244,6 +244,7 @@ function TaskBoard() {
                   {isAssignee(task) && !isCreator(task) && task.createdBy && (
                     <span>From {task.createdBy.name}</span>
                   )}
+                  {task.sourceMessage && <span>From chat</span>}
                   {task.dueDate && (
                     <span
                       className={

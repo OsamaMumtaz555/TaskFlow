@@ -86,6 +86,11 @@ function TaskDetailModal({ taskId, onClose }) {
                 )}
               </Row>
             </div>
+           {task.sourceMessage && (
+              <p className="text-xs text-gray-400 mt-3">
+                Created from a chat message
+              </p>
+            )}
 
             {task.readOnly ? (
               <p className="text-sm text-gray-500 bg-gray-50 rounded-md px-3 py-2 mt-4">

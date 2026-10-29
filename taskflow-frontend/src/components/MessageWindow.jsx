@@ -4,6 +4,7 @@ import { getSocket } from "../socket";
 import SharedTaskCard from "./SharedTaskCard";
 import TaskDetailModal from "./TaskDetailModal";
 import TaskPickerModal from "./TaskPickerModal";
+import CreateTaskModal from "./CreateTaskModal";
 import {
   initials,
   formatTime,
@@ -31,9 +32,11 @@ function MessageWindow({ conversation, currentUserId, isOnline, isTyping, onRead
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState("");
   const [connected, setConnected] = useState(true);
+  const [notice, setNotice] = useState("");
 
   const [showPicker, setShowPicker] = useState(false);
   const [openTaskId, setOpenTaskId] = useState(null);
+  const [createFrom, setCreateFrom] = useState(null); // the message a task is created from
 
   const scrollRef = useRef(null);
   const inputRef = useRef(null);
@@ -49,6 +52,13 @@ function MessageWindow({ conversation, currentUserId, isOnline, isTyping, onRead
   useEffect(() => {
     messagesRef.current = messages;
   }, [messages]);
+
+  // Hide the green confirmation banner after 4 seconds
+  useEffect(() => {
+    if (!notice) return;
+    const timer = setTimeout(() => setNotice(""), 4000);
+    return () => clearTimeout(timer);
+  }, [notice]);
 
   // Mark this conversation as read on the server and update the badges
   const markAsRead = () =>
@@ -306,10 +316,10 @@ function MessageWindow({ conversation, currentUserId, isOnline, isTyping, onRead
     }
   };
 
-  // One function for both plain messages and shared tasks (the text is an optional note)
-  const sendMessage = (taskId) => {
-    const clean = text.trim();
-    if ((!clean && !taskId) || sending) return;
+  // The one place that sends through the socket: a text, a task, or both
+  const deliver = ({ text: body, taskId }, onDone) => {
+    const clean = (body || "").trim();
+    if (!clean && !taskId) return;
 
     const socket = getSocket();
     if (!socket || !socket.connected) {
@@ -337,20 +347,41 @@ function MessageWindow({ conversation, currentUserId, isOnline, isTyping, onRead
             setSendError(reply?.error || "Could not send the message");
             return;
           }
-          setText(""); // the message itself appears through "message:new"
-          inputRef.current?.focus();
+          onDone?.(); // the message itself appears through "message:new"
         }
       );
   };
 
+  // Send what is typed in the input (optionally together with a picked task)
+  const sendFromInput = (taskId) => {
+    if (sending) return;
+    deliver({ text, taskId }, () => {
+      setText("");
+      inputRef.current?.focus();
+    });
+  };
+
   const handleSend = (e) => {
     e.preventDefault();
-    sendMessage();
+    sendFromInput();
   };
 
   const handleShareTask = (task) => {
     setShowPicker(false);
-    sendMessage(task._id);
+    sendFromInput(task._id);
+  };
+
+  // A task was created from a message
+  const handleTaskCreated = (task, shareInChat) => {
+    setCreateFrom(null);
+    setNotice(
+      task.assignedTo
+        ? `Task created and assigned to ${task.assignedTo.name}`
+        : "Task created"
+    );
+    if (shareInChat) {
+      deliver({ text: "Created a task from a message", taskId: task._id });
+    }
   };
 
   const other = conversation.other;
@@ -393,6 +424,10 @@ function MessageWindow({ conversation, currentUserId, isOnline, isTyping, onRead
         </p>
       )}
 
+      {notice && (
+        <p className="bg-green-50 text-green-700 text-sm px-5 py-2">{notice}</p>
+      )}
+
       {/* Messages */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-5 py-4 bg-white">
         {loading ? (
@@ -423,6 +458,18 @@ function MessageWindow({ conversation, currentUserId, isOnline, isTyping, onRead
                 index === 0 ||
                 !isSameDay(messages[index - 1].createdAt, message.createdAt);
 
+              // appears next to the bubble when hovering a message that has text
+              const createTaskLink = message.text && (
+                <button
+                  type="button"
+                  onClick={() => setCreateFrom(message)}
+                  title="Create a task from this message"
+                  className="text-xs text-gray-400 hover:text-blue-600 opacity-0 group-hover:opacity-100 focus:opacity-100 transition shrink-0"
+                >
+                  Create task
+                </button>
+              );
+
               return (
                 <div key={message._id}>
                   {showDay && (
@@ -433,8 +480,12 @@ function MessageWindow({ conversation, currentUserId, isOnline, isTyping, onRead
                     </div>
                   )}
                   <div
-                    className={`flex mb-2 ${mine ? "justify-end" : "justify-start"}`}
+                    className={`group flex items-center gap-2 mb-2 ${
+                      mine ? "justify-end" : "justify-start"
+                    }`}
                   >
+                    {mine && createTaskLink}
+
                     <div
                       className={`max-w-[70%] px-4 py-2 rounded-2xl ${
                         message.taskTitle ? "min-w-[16rem]" : ""
@@ -466,6 +517,8 @@ function MessageWindow({ conversation, currentUserId, isOnline, isTyping, onRead
                         {formatTime(message.createdAt)}
                       </p>
                     </div>
+
+                    {!mine && createTaskLink}
                   </div>
                 </div>
               );
@@ -524,6 +577,15 @@ function MessageWindow({ conversation, currentUserId, isOnline, isTyping, onRead
         <TaskDetailModal
           taskId={openTaskId}
           onClose={() => setOpenTaskId(null)}
+        />
+      )}
+
+      {createFrom && (
+        <CreateTaskModal
+          message={createFrom}
+          otherUser={other}
+          onClose={() => setCreateFrom(null)}
+          onCreated={handleTaskCreated}
         />
       )}
     </div>

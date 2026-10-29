@@ -25,6 +25,12 @@ const taskSchema = new mongoose.Schema(
       ref: "User",
       default: null,
     },
+    // The chat message this task was created from (if any)
+    sourceMessage: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Message",
+      default: null,
+    },
   },
   { timestamps: true }
 );
