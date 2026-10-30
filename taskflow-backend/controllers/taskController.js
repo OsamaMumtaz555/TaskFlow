@@ -9,6 +9,7 @@ const {
   emitToUsers,
   emitTaskUpdated,
 } = require('../services/taskEvents');
+const { notifyUsers } = require('../services/notificationService');
 
 // helper: fill in creator/assignee names on a task
 const populateTask = (task) =>
@@ -132,6 +133,17 @@ const createTask = async (req, res) => {
     });
 
     await populateTask(newTask);
+
+    // tell the assignee (nothing happens if they assigned it to themselves)
+    if (newTask.assignedTo) {
+      await notifyUsers(req.app.get('io'), [newTask.assignedTo._id], {
+        type: 'task_assigned',
+        actor: req.user,
+        task: newTask,
+        taskTitle: newTask.title,
+      });
+    }
+
     res.status(201).json(newTask);
   } catch (error) {
     res.status(400).json({ message: 'Error creating task', error: error.message });
@@ -171,6 +183,10 @@ const updateTask = async (req, res) => {
       }
     }
 
+    // remember how things were BEFORE the change, to know what changed
+    const previousAssignee = task.assignedTo ? task.assignedTo.toString() : null;
+    const previousStatus = task.status;
+
     allowedFields.forEach((field) => {
       if (req.body[field] !== undefined) {
         // an empty assignedTo / dueDate means "clear it"
@@ -184,8 +200,33 @@ const updateTask = async (req, res) => {
     await task.save(); // runs schema validation
     await populateTask(task);
 
+    const io = req.app.get('io');
+
     // live update for shared task cards in chat
-    await emitTaskUpdated(req.app.get('io'), task);
+    await emitTaskUpdated(io, task);
+
+    // ---- notifications ----
+    const currentAssignee = task.assignedTo ? task.assignedTo._id.toString() : null;
+    const assigneeChanged = currentAssignee !== previousAssignee;
+    const base = { actor: req.user, task, taskTitle: task.title };
+
+    if (assigneeChanged && currentAssignee) {
+      await notifyUsers(io, [currentAssignee], { ...base, type: 'task_assigned' });
+    }
+    if (assigneeChanged && previousAssignee) {
+      await notifyUsers(io, [previousAssignee], { ...base, type: 'task_unassigned' });
+    }
+    if (task.status !== previousStatus) {
+      const creatorId = task.createdBy ? task.createdBy._id.toString() : null;
+      // a brand-new assignee already got "assigned", so don't tell them twice
+      const audience = [creatorId, assigneeChanged ? null : currentAssignee];
+      await notifyUsers(io, audience, {
+        ...base,
+        type: 'task_status_changed',
+        fromStatus: previousStatus,
+        toStatus: task.status,
+      });
+    }
 
     res.json(task);
   } catch (error) {
@@ -212,8 +253,16 @@ const deleteTask = async (req, res) => {
     // work out who to tell BEFORE the task disappears
     const recipients = await getRecipientIds(task);
     await task.deleteOne();
-    emitToUsers(req.app.get('io'), recipients, 'task:deleted', {
-      taskId: task._id.toString(),
+
+    const io = req.app.get('io');
+    emitToUsers(io, recipients, 'task:deleted', { taskId: task._id.toString() });
+
+    // tell the creator and the assignee (never the person who deleted it)
+    await notifyUsers(io, [task.createdBy, task.assignedTo], {
+      type: 'task_deleted',
+      actor: req.user,
+      task: null, // the task no longer exists
+      taskTitle: task.title,
     });
 
     res.json({ message: 'Task deleted successfully' });

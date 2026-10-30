@@ -26,12 +26,14 @@ const taskRoutes = require('./routes/taskRoutes');
 const authRoutes = require('./routes/authRoutes');
 const userRoutes = require('./routes/userRoutes');
 const chatRoutes = require('./routes/chatRoutes');
+const notificationRoutes = require('./routes/notificationRoutes');
 
 // Tell Express: any request starting with /api/tasks goes to taskRoutes
 app.use('/api/tasks', taskRoutes);
 app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/chats', chatRoutes);
+app.use('/api/notifications', notificationRoutes);
 
 // Define the port number the server will listen on
 const PORT = process.env.PORT || 5000;
