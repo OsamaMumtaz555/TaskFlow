@@ -10,6 +10,8 @@ export const describeNotification = (n) => {
       return `${who} removed you from the task: "${title}"`;
     case "task_status_changed":
       return `${who} changed "${title}" from ${n.fromStatus} to ${n.toStatus}`;
+    case "task_commented":
+      return `${who} commented on "${title}"`;
     case "task_deleted":
       return `${who} deleted the task: "${title}"`;
     default:
@@ -20,7 +22,9 @@ export const describeNotification = (n) => {
 // Only these notifications still point to a task the user can open
 export const opensTask = (n) =>
   Boolean(n.task) &&
-  (n.type === "task_assigned" || n.type === "task_status_changed");
+  (n.type === "task_assigned" ||
+    n.type === "task_status_changed" ||
+    n.type === "task_commented");
 
 // "just now", "5 min ago", "3 h ago", "2 d ago", or a short date
 export const timeAgo = (value) => {

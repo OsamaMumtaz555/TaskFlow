@@ -10,7 +10,13 @@ const notificationSchema = new mongoose.Schema(
     },
     type: {
       type: String,
-      enum: ['task_assigned', 'task_unassigned', 'task_status_changed', 'task_deleted'],
+           enum: [
+        'task_assigned',
+        'task_unassigned',
+        'task_status_changed',
+        'task_deleted',
+        'task_commented',
+      ],
       required: true,
     },
     // who caused it

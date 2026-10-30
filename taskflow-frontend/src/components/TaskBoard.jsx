@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import api from "../api/api";
 import TaskEditModal from "./TaskEditModal";
+import TaskDetailModal from "./TaskDetailModal";
 import {
   getId,
   getCurrentUser,
@@ -22,6 +23,7 @@ function TaskBoard() {
   const [newAssignee, setNewAssignee] = useState("");
   const [createError, setCreateError] = useState("");
   const [editingTask, setEditingTask] = useState(null);
+  const [detailTaskId, setDetailTaskId] = useState(null);
 
   const user = getCurrentUser();
 
@@ -271,6 +273,12 @@ function TaskBoard() {
                 >
                   {task.status}
                 </span>
+                <button
+                  onClick={() => setDetailTaskId(task._id)}
+                  className="text-gray-600 hover:text-gray-800 text-sm font-medium"
+                >
+                  Details
+                </button>
                 {canEdit(task) && (
                   <button
                     onClick={() => setEditingTask(task)}
@@ -293,6 +301,13 @@ function TaskBoard() {
         )}
       </div>
 
+        {detailTaskId && (
+        <TaskDetailModal
+          taskId={detailTaskId}
+          showOpenLink={false}
+          onClose={() => setDetailTaskId(null)}
+        />
+      )}
       {editingTask && (
         <TaskEditModal
           task={editingTask}

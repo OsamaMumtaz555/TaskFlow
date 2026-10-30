@@ -4,12 +4,14 @@ const Task = require('../models/Task');
 const User = require('../models/User');
 const Conversation = require('../models/Conversation');
 const Message = require('../models/Message');
+const TaskActivity = require('../models/TaskActivity');
 const {
   getRecipientIds,
   emitToUsers,
   emitTaskUpdated,
 } = require('../services/taskEvents');
 const { notifyUsers } = require('../services/notificationService');
+const { logActivity, buildChanges } = require('../services/activityService');
 
 // helper: fill in creator/assignee names on a task
 const populateTask = (task) =>
@@ -134,15 +136,23 @@ const createTask = async (req, res) => {
 
     await populateTask(newTask);
 
+    const io = req.app.get('io');
+
     // tell the assignee (nothing happens if they assigned it to themselves)
     if (newTask.assignedTo) {
-      await notifyUsers(req.app.get('io'), [newTask.assignedTo._id], {
+      await notifyUsers(io, [newTask.assignedTo._id], {
         type: 'task_assigned',
         actor: req.user,
         task: newTask,
         taskTitle: newTask.title,
       });
     }
+
+    // first entry of the task's history
+    await logActivity(io, newTask, req.user, {
+      kind: 'created',
+      to: newTask.assignedTo ? newTask.assignedTo.name : undefined,
+    });
 
     res.status(201).json(newTask);
   } catch (error) {
@@ -184,8 +194,16 @@ const updateTask = async (req, res) => {
     }
 
     // remember how things were BEFORE the change, to know what changed
-    const previousAssignee = task.assignedTo ? task.assignedTo.toString() : null;
-    const previousStatus = task.status;
+    const before = {
+      title: task.title,
+      description: task.description,
+      status: task.status,
+      priority: task.priority,
+      dueDate: task.dueDate,
+      assignee: task.assignedTo ? task.assignedTo.toString() : null,
+    };
+    const previousAssignee = before.assignee;
+    const previousStatus = before.status;
 
     allowedFields.forEach((field) => {
       if (req.body[field] !== undefined) {
@@ -205,9 +223,29 @@ const updateTask = async (req, res) => {
     // live update for shared task cards in chat
     await emitTaskUpdated(io, task);
 
-    // ---- notifications ----
     const currentAssignee = task.assignedTo ? task.assignedTo._id.toString() : null;
     const assigneeChanged = currentAssignee !== previousAssignee;
+
+    // ---- activity history ----
+    const previousUser =
+      assigneeChanged && previousAssignee
+        ? await User.findById(previousAssignee).select('name')
+        : null;
+    const changes = buildChanges(
+      before,
+      {
+        title: task.title,
+        description: task.description,
+        status: task.status,
+        priority: task.priority,
+        dueDate: task.dueDate,
+        assignee: currentAssignee,
+      },
+      { from: previousUser?.name, to: task.assignedTo?.name }
+    );
+    await logActivity(io, task, req.user, changes);
+
+    // ---- notifications ----
     const base = { actor: req.user, task, taskTitle: task.title };
 
     if (assigneeChanged && currentAssignee) {
@@ -253,6 +291,7 @@ const deleteTask = async (req, res) => {
     // work out who to tell BEFORE the task disappears
     const recipients = await getRecipientIds(task);
     await task.deleteOne();
+    await TaskActivity.deleteMany({ task: task._id }); // its history goes with it
 
     const io = req.app.get('io');
     emitToUsers(io, recipients, 'task:deleted', { taskId: task._id.toString() });
