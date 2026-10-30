@@ -98,7 +98,10 @@ function TaskDetailModal({ taskId, onClose }) {
               </p>
             ) : (
               <button
-                onClick={() => navigate("/tasks")}
+              onClick={() => {
+                  onClose();
+                  navigate("/tasks");
+                }}
                 className="mt-4 text-sm font-medium text-blue-600 hover:text-blue-800"
               >
                 Open in My Tasks

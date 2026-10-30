@@ -1,4 +1,5 @@
 import { useNavigate } from "react-router-dom";
+import NotificationBell from "./NotificationBell";
 
 function Navbar() {
   const navigate = useNavigate();
@@ -15,6 +16,7 @@ function Navbar() {
       <h1 className="text-xl font-bold">TaskFlow</h1>
 
       <div className="flex items-center gap-4">
+        <NotificationBell />
         <span className="text-sm">Welcome, {user?.name}</span>
         <button
           onClick={handleLogout}
@@ -27,4 +29,4 @@ function Navbar() {
   );
 }
 
-export default Navbar;
+export default Navbar; 
