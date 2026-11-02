@@ -21,7 +21,8 @@ const getConversationForUser = async (conversationId, userId) => {
 };
 
 // Validates, saves a message and updates the conversation preview
-const saveMessage = async ({ conversationId, senderId, text, taskId }) => {
+// attachment (optional): { originalName, storedName, mimeType, size } of an already saved file
+const saveMessage = async ({ conversationId, senderId, text, taskId, attachment }) => {
   const clean = typeof text === 'string' ? text.trim() : '';
   if (clean.length > 2000) throw new Error('Message is too long (max 2000 characters)');
 
@@ -42,7 +43,7 @@ const saveMessage = async ({ conversationId, senderId, text, taskId }) => {
     }
   }
 
-  if (!clean && !task) throw new Error('Message cannot be empty');
+  if (!clean && !task && !attachment) throw new Error('Message cannot be empty');
 
   const conversation = await getConversationForUser(conversationId, senderId);
   if (!conversation) throw new Error('Conversation not found');
@@ -62,10 +63,15 @@ const saveMessage = async ({ conversationId, senderId, text, taskId }) => {
     text: clean,
     task: task ? task._id : null,
     taskTitle: task ? task.title : undefined,
+    attachment: attachment || undefined,
   });
 
+  const preview =
+    clean ||
+    (attachment ? `📎 ${attachment.originalName}` : `📎 ${task.title}`);
+
   conversation.lastMessage = {
-    text: (clean || `📎 ${task.title}`).slice(0, 100),
+    text: preview.slice(0, 100),
     sender: senderId,
     sentAt: message.createdAt,
   };
@@ -73,7 +79,12 @@ const saveMessage = async ({ conversationId, senderId, text, taskId }) => {
   await conversation.save();
 
   await message.populate(messagePopulate);
-  return { message: message.toObject(), conversation };
+
+  // the name on disk must never reach a client
+  const plain = message.toObject();
+  if (plain.attachment) delete plain.attachment.storedName;
+
+  return { message: plain, conversation };
 };
 
 // Marks everything the OTHER person sent in this conversation as read
