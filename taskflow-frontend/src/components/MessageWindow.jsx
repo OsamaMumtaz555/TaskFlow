@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useLayoutEffect } from "react";
 import api from "../api/api";
 import { getSocket } from "../socket";
 import SharedTaskCard from "./SharedTaskCard";
+import FileAttachment from "./FileAttachment";
 import TaskDetailModal from "./TaskDetailModal";
 import TaskPickerModal from "./TaskPickerModal";
 import CreateTaskModal from "./CreateTaskModal";
@@ -11,6 +12,13 @@ import {
   isSameDay,
   dayLabel,
 } from "../utils/chatHelpers";
+import {
+  ACCEPT,
+  validateFile,
+  formatSize,
+  extensionOf,
+  badgeColor,
+} from "../utils/fileHelpers";
 
 const PAGE_SIZE = 30;
 
@@ -34,12 +42,17 @@ function MessageWindow({ conversation, currentUserId, isOnline, isTyping, onRead
   const [connected, setConnected] = useState(true);
   const [notice, setNotice] = useState("");
 
+  const [pendingFile, setPendingFile] = useState(null); // chosen, not sent yet
+  const [uploadProgress, setUploadProgress] = useState(null); // 0-100 while uploading
+  const [dragging, setDragging] = useState(false);
+
   const [showPicker, setShowPicker] = useState(false);
   const [openTaskId, setOpenTaskId] = useState(null);
   const [createFrom, setCreateFrom] = useState(null); // the message a task is created from
 
   const scrollRef = useRef(null);
   const inputRef = useRef(null);
+  const fileInputRef = useRef(null);
   // What to do with the scrollbar after the next render:
   // "bottom" (show newest) or { restoreFrom } (keep position after loading older)
   const pendingScroll = useRef("bottom");
@@ -316,7 +329,7 @@ function MessageWindow({ conversation, currentUserId, isOnline, isTyping, onRead
     }
   };
 
-  // The one place that sends through the socket: a text, a task, or both
+  // The one place that sends text or a task through the socket
   const deliver = ({ text: body, taskId }, onDone) => {
     const clean = (body || "").trim();
     if (!clean && !taskId) return;
@@ -361,9 +374,62 @@ function MessageWindow({ conversation, currentUserId, isOnline, isTyping, onRead
     });
   };
 
+  // ---- Files ----
+  // A file was picked or dropped: check it, then keep it ready to send
+  const chooseFile = (file) => {
+    if (!file) return;
+    const problem = validateFile(file);
+    if (problem) {
+      setSendError(problem);
+      return;
+    }
+    setSendError("");
+    setPendingFile(file);
+    inputRef.current?.focus();
+  };
+
+  const handleFileInput = (e) => {
+    chooseFile(e.target.files[0]);
+    e.target.value = ""; // so picking the same file again still works
+  };
+
+  // Upload the chosen file (the text in the input becomes its note)
+  const uploadPending = async () => {
+    const form = new FormData();
+    if (text.trim()) form.append("text", text.trim());
+    form.append("file", pendingFile);
+
+    stopTyping();
+    setSending(true);
+    setSendError("");
+    setUploadProgress(0);
+
+    try {
+      await api.post(`/chats/${conversation._id}/files`, form, {
+        onUploadProgress: (event) => {
+          if (event.total) {
+            setUploadProgress(Math.round((event.loaded * 100) / event.total));
+          }
+        },
+      });
+      // the message itself appears through "message:new"
+      setPendingFile(null);
+      setText("");
+      inputRef.current?.focus();
+    } catch (err) {
+      console.error("Failed to upload file:", err);
+      setSendError(err.response?.data?.message || "Could not upload the file");
+    } finally {
+      setSending(false);
+      setUploadProgress(null);
+    }
+  };
+
   const handleSend = (e) => {
     e.preventDefault();
-    sendFromInput();
+    if (sending) return;
+    if (pendingFile) uploadPending();
+    else sendFromInput();
   };
 
   const handleShareTask = (task) => {
@@ -387,8 +453,33 @@ function MessageWindow({ conversation, currentUserId, isOnline, isTyping, onRead
   const other = conversation.other;
   const otherInactive = other && other.isActive === false;
 
+  const handleDrop = (e) => {
+    e.preventDefault();
+    setDragging(false);
+    if (otherInactive || sending) return;
+    chooseFile(e.dataTransfer.files[0]);
+  };
+
   return (
-    <div className="flex flex-col h-full">
+    <div
+      className="relative flex flex-col h-full"
+      onDragOver={(e) => {
+        if (Array.from(e.dataTransfer.types).includes("Files")) {
+          e.preventDefault();
+          setDragging(true);
+        }
+      }}
+      onDragLeave={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget)) setDragging(false);
+      }}
+      onDrop={handleDrop}
+    >
+      {dragging && (
+        <div className="absolute inset-0 z-30 bg-blue-50/90 border-2 border-dashed border-blue-400 rounded-md flex items-center justify-center pointer-events-none">
+          <p className="text-blue-700 font-semibold">Drop the file to attach it</p>
+        </div>
+      )}
+
       {/* Header */}
       <div className="px-5 py-3 border-b border-gray-200 flex items-center gap-3">
         <div className="relative shrink-0">
@@ -457,6 +548,7 @@ function MessageWindow({ conversation, currentUserId, isOnline, isTyping, onRead
               const showDay =
                 index === 0 ||
                 !isSameDay(messages[index - 1].createdAt, message.createdAt);
+              const hasAttachment = Boolean(message.attachment?.originalName);
 
               // appears next to the bubble when hovering a message that has text
               const createTaskLink = message.text && (
@@ -488,7 +580,7 @@ function MessageWindow({ conversation, currentUserId, isOnline, isTyping, onRead
 
                     <div
                       className={`max-w-[70%] px-4 py-2 rounded-2xl ${
-                        message.taskTitle ? "min-w-[16rem]" : ""
+                        message.taskTitle || hasAttachment ? "min-w-[16rem]" : ""
                       } ${
                         mine
                           ? "bg-blue-600 text-white rounded-br-sm"
@@ -506,6 +598,13 @@ function MessageWindow({ conversation, currentUserId, isOnline, isTyping, onRead
                           task={message.task}
                           title={message.taskTitle}
                           onOpen={setOpenTaskId}
+                        />
+                      )}
+
+                      {hasAttachment && (
+                        <FileAttachment
+                          conversationId={conversation._id}
+                          message={message}
                         />
                       )}
 
@@ -535,11 +634,73 @@ function MessageWindow({ conversation, currentUserId, isOnline, isTyping, onRead
       {/* Input */}
       <form onSubmit={handleSend} className="border-t border-gray-200 p-4">
         {sendError && <p className="text-red-600 text-sm mb-2">{sendError}</p>}
+
+        {/* The chosen file, waiting to be sent */}
+        {pendingFile && (
+          <div className="flex items-center gap-3 bg-gray-50 border border-gray-200 rounded-md px-3 py-2 mb-3">
+            <span
+              className={`text-xs font-bold px-2 py-1.5 rounded shrink-0 ${badgeColor(pendingFile.name)}`}
+            >
+              {extensionOf(pendingFile.name).toUpperCase()}
+            </span>
+            <div className="min-w-0 flex-1">
+              <p className="text-sm text-gray-800 truncate">{pendingFile.name}</p>
+              <p className="text-xs text-gray-500">{formatSize(pendingFile.size)}</p>
+              {uploadProgress !== null && (
+                <div className="w-full bg-gray-200 rounded-full h-1.5 mt-1">
+                  <div
+                    className="bg-blue-600 h-1.5 rounded-full transition-all"
+                    style={{ width: `${uploadProgress}%` }}
+                  />
+                </div>
+              )}
+            </div>
+            {!sending && (
+              <button
+                type="button"
+                onClick={() => setPendingFile(null)}
+                aria-label="Remove file"
+                className="text-gray-400 hover:text-gray-600 text-xl leading-none"
+              >
+                ×
+              </button>
+            )}
+          </div>
+        )}
+
         <div className="flex gap-3">
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept={ACCEPT}
+            onChange={handleFileInput}
+            className="hidden"
+          />
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={otherInactive || sending}
+            aria-label="Attach a file"
+            title="Attach a file"
+            className="px-3 py-2 rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50 shrink-0"
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className="w-5 h-5"
+            >
+              <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+            </svg>
+          </button>
           <button
             type="button"
             onClick={() => setShowPicker(true)}
-            disabled={otherInactive || sending}
+            disabled={otherInactive || sending || Boolean(pendingFile)}
             className="px-3 py-2 rounded-md border border-gray-300 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 shrink-0"
           >
             Share task
@@ -552,16 +713,24 @@ function MessageWindow({ conversation, currentUserId, isOnline, isTyping, onRead
             disabled={otherInactive}
             maxLength={2000}
             placeholder={
-              otherInactive ? "You can't message this user" : "Type a message..."
+              otherInactive
+                ? "You can't message this user"
+                : pendingFile
+                ? "Add a note (optional)..."
+                : "Type a message..."
             }
             className="flex-1 border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100"
           />
           <button
             type="submit"
-            disabled={!text.trim() || sending || otherInactive}
-            className="bg-blue-600 text-white font-semibold px-4 py-2 rounded-md hover:bg-blue-700 transition disabled:opacity-50"
+            disabled={(!text.trim() && !pendingFile) || sending || otherInactive}
+            className="bg-blue-600 text-white font-semibold px-4 py-2 rounded-md hover:bg-blue-700 transition disabled:opacity-50 min-w-20"
           >
-            {sending ? "Sending..." : "Send"}
+            {uploadProgress !== null
+              ? `${uploadProgress}%`
+              : sending
+              ? "Sending..."
+              : "Send"}
           </button>
         </div>
       </form>

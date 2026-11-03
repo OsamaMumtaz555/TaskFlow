@@ -115,7 +115,13 @@ function ChatPage() {
               ? {
                   ...c,
                   lastMessage: {
-                text: (message.text || `📎 ${message.taskTitle}`).slice(0, 100),
+                    // text, or a file name, or a task title for messages without text
+                    text: (
+                      message.text ||
+                      (message.attachment
+                        ? `📎 ${message.attachment.originalName}`
+                        : `📎 ${message.taskTitle}`)
+                    ).slice(0, 100),
                     sender: message.sender._id,
                     sentAt: message.createdAt,
                   },
