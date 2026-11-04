@@ -1,22 +1,24 @@
 import { useEffect } from "react";
 import { Routes, Route, useLocation } from "react-router-dom";
-import { getSocket } from "./socket";
 import api from "./api/api";
+import { getSocket } from "./socket";
 import { getCurrentUser, saveCurrentUser } from "./utils/taskHelpers";
+import CallProvider from "./context/CallProvider";
 import LoginPage from "./pages/LoginPage";
 import DashboardPage from "./pages/DashboardPage";
 import TasksPage from "./pages/TasksPage";
 import ChatPage from "./pages/ChatPage";
 import TeamPage from "./pages/TeamPage";
-import SettingsPage from "./pages/SettingsPage"; 
+import SettingsPage from "./pages/SettingsPage";
 import ProtectedRoute from "./components/ProtectedRoute";
 
 function App() {
-    // Keep one socket connection alive while logged in (it closes after logout)
+  // Keep one socket connection alive while logged in (it closes after logout)
   const location = useLocation();
   useEffect(() => {
     getSocket();
   }, [location.pathname]);
+
   // Keep the saved user (name, email, role) in sync with the server.
   // Runs on first load and whenever the user comes back to this tab.
   useEffect(() => {
@@ -55,49 +57,53 @@ function App() {
   }, []);
 
   return (
-    <Routes>
-      <Route path="/" element={<LoginPage />} />
-      <Route
-        path="/dashboard"
-        element={
-          <ProtectedRoute>
-            <DashboardPage />
-          </ProtectedRoute>
-        }
-      />
-      <Route
-        path="/tasks"
-        element={
-          <ProtectedRoute>
-            <TasksPage />
-          </ProtectedRoute>
-        }
-      />
-      <Route
-        path="/chat"
-        element={
-          <ProtectedRoute>
-            <ChatPage />
-          </ProtectedRoute>
-        }
-      />
-      <Route
-        path="/team"
-        element={
-          <ProtectedRoute>
-            <TeamPage />
-          </ProtectedRoute>
-        }
-      />
-      <Route
-        path="/settings"
-        element={
-          <ProtectedRoute>
-            <SettingsPage />
-          </ProtectedRoute>
-        }
-      />
-    </Routes>
+    // CallProvider handles voice calls for the whole app, so incoming calls
+    // ring on every page and a call keeps going while you move between pages
+    <CallProvider>
+      <Routes>
+        <Route path="/" element={<LoginPage />} />
+        <Route
+          path="/dashboard"
+          element={
+            <ProtectedRoute>
+              <DashboardPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/tasks"
+          element={
+            <ProtectedRoute>
+              <TasksPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/chat"
+          element={
+            <ProtectedRoute>
+              <ChatPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/team"
+          element={
+            <ProtectedRoute>
+              <TeamPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/settings"
+          element={
+            <ProtectedRoute>
+              <SettingsPage />
+            </ProtectedRoute>
+          }
+        />
+      </Routes>
+    </CallProvider>
   );
 }
 

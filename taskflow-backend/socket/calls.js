@@ -5,7 +5,7 @@ const { getConversationForUser } = require('../services/chatService');
 // An unanswered call stops ringing after this long
 const RING_TIMEOUT_MS = Number(process.env.CALL_RING_TIMEOUT_MS) || 30 * 1000;
 // WebRTC messages (offers, answers, ICE candidates) are small; refuse anything huge
-const MAX_SIGNAL_SIZE = 16 * 1024;
+const MAX_SIGNAL_SIZE = 64 * 1024; 
 
 // callId -> call, and userId -> the callId they are in (a person is in at most one call)
 const calls = new Map();
