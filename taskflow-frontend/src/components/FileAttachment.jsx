@@ -132,11 +132,12 @@ function FileAttachment({ conversationId, message }) {
       <div className="mt-1">
         {imageUrl ? (
           <button type="button" onClick={() => setViewing(true)} className="block">
-            <img
+              <img
               src={imageUrl}
               alt={attachment.originalName}
+              onError={() => setImageFailed(true)}
               className="max-h-52 max-w-full rounded-lg object-cover"
-            />
+            /> 
           </button>
         ) : (
           <div className="h-32 w-48 rounded-lg bg-white/60 animate-pulse" />

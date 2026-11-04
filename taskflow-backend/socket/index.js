@@ -1,6 +1,7 @@
 const { Server } = require('socket.io');
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
+const { registerCallHandlers } = require('./calls');
 const {
   saveMessage,
   getConversationForUser,
@@ -56,6 +57,8 @@ const initSocket = (httpServer) => {
 
   io.on('connection', (socket) => {
     const userId = socket.user._id.toString();
+        // ---- Calls (voice / video) ----
+    registerCallHandlers(io, socket, onlineUsers);
 
     // Every user has a private room, so we can reach ALL of their open tabs
     socket.join(`user:${userId}`);
