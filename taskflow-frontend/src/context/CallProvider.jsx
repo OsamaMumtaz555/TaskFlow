@@ -5,41 +5,74 @@ import { getSocket, onSocketChange } from "../socket";
 import { ICE_SERVERS, formatDuration } from "../utils/callHelpers";
 import { startRingtone, stopRingtone } from "../utils/ringtone";
 
-// Asks for the microphone and turns browser errors into friendly messages
-const getMicrophone = async () => {
+const AUDIO_CONSTRAINTS = { echoCancellation: true, noiseSuppression: true };
+const VIDEO_CONSTRAINTS = {
+  width: { ideal: 1280 },
+  height: { ideal: 720 },
+  frameRate: { ideal: 24 },
+};
+
+// Turns browser microphone errors into friendly messages
+const microphoneError = (err) => {
+  if (err.name === "NotAllowedError") {
+    return new Error(
+      "Microphone access was blocked. Allow it in the browser address bar and try again."
+    );
+  }
+  if (err.name === "NotFoundError") {
+    return new Error("No microphone was found on this device.");
+  }
+  return new Error("Could not use the microphone.");
+};
+
+// Asks for the microphone, and the camera too when wantVideo is true.
+// If the camera cannot be used (none, blocked, busy), it falls back to the microphone only.
+const getMedia = async (wantVideo) => {
   if (!navigator.mediaDevices?.getUserMedia) {
     throw new Error("Calls need a secure page (https) and a modern browser.");
   }
+
+  if (wantVideo) {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: AUDIO_CONSTRAINTS,
+        video: VIDEO_CONSTRAINTS,
+      });
+      return { stream, hasVideo: true };
+    } catch (err) {
+      console.warn("Camera not available, trying the microphone only:", err.name);
+    }
+  }
+
   try {
-    return await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: true, noiseSuppression: true },
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: AUDIO_CONSTRAINTS,
     });
+    return { stream, hasVideo: false };
   } catch (err) {
-    if (err.name === "NotAllowedError") {
-      throw new Error(
-        "Microphone access was blocked. Allow it in the browser address bar and try again."
-      );
-    }
-    if (err.name === "NotFoundError") {
-      throw new Error("No microphone was found on this device.");
-    }
-    throw new Error("Could not use the microphone.");
+    throw microphoneError(err);
   }
 };
 
+const CAMERA_FALLBACK_NOTICE = "Camera unavailable, continuing with audio only.";
+
 function CallProvider({ children }) {
-  // call = { id, conversationId, type, direction: "outgoing" | "incoming",
+  // call = { id, conversationId, type: "audio" | "video", direction: "outgoing" | "incoming",
   //          peer: { _id, name }, status: "ringing" | "connecting" | "active",
-  //          startedAt, reconnecting, remoteMuted }   (null = no call)
+  //          startedAt, reconnecting, remoteMuted, remoteVideoOff }   (null = no call)
   const [call, setCall] = useState(null);
   const [muted, setMuted] = useState(false);
+  const [cameraOff, setCameraOff] = useState(false);
+  const [hasCamera, setHasCamera] = useState(false); // my stream has a video track
+  const [localStream, setLocalStream] = useState(null);
+  const [remoteStream, setRemoteStream] = useState(null);
+  const [remoteHasVideo, setRemoteHasVideo] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const [notice, setNotice] = useState("");
 
   const callRef = useRef(null); // the same call, readable from event handlers
   const pcRef = useRef(null); // the WebRTC connection
-  const localStreamRef = useRef(null); // my microphone
-  const remoteAudioRef = useRef(null); // plays the other person's voice
+  const localStreamRef = useRef(null); // my camera and microphone
   const pendingCandidates = useRef([]); // network routes that arrived too early
   const startingRef = useRef(false); // a call is being started (permission prompt open)
   const endNoticeRef = useRef(""); // message to show when I end the call myself because of an error
@@ -50,7 +83,7 @@ function CallProvider({ children }) {
     setCall(next);
   };
 
-  // Stops the microphone, closes the WebRTC connection, stops the ringtone
+  // Stops the camera and microphone, closes the WebRTC connection, stops the ringtone
   const cleanupMedia = () => {
     stopRingtone();
 
@@ -65,11 +98,14 @@ function CallProvider({ children }) {
 
     localStreamRef.current?.getTracks().forEach((track) => track.stop());
     localStreamRef.current = null;
-
     pendingCandidates.current = [];
-    if (remoteAudioRef.current) remoteAudioRef.current.srcObject = null;
 
+    setLocalStream(null);
+    setRemoteStream(null);
+    setRemoteHasVideo(false);
+    setHasCamera(false);
     setMuted(false);
+    setCameraOff(false);
     setElapsed(0);
   };
 
@@ -87,11 +123,15 @@ function CallProvider({ children }) {
   // Creates the WebRTC connection and wires it up
   const createPeer = (callId) => {
     const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+    const stream = localStreamRef.current;
 
-    // send my microphone to the other person
-    localStreamRef.current
-      .getTracks()
-      .forEach((track) => pc.addTrack(track, localStreamRef.current));
+    // send my microphone (and camera) to the other person
+    stream.getTracks().forEach((track) => pc.addTrack(track, stream));
+
+    // In a video call, always be ready to RECEIVE video, even if I have no camera
+    if (callRef.current?.type === "video" && stream.getVideoTracks().length === 0) {
+      pc.addTransceiver("video", { direction: "recvonly" });
+    }
 
     // every network route my browser finds is passed to the other browser
     pc.onicecandidate = (event) => {
@@ -100,11 +140,10 @@ function CallProvider({ children }) {
       }
     };
 
-    // the other person's voice arrives here
+    // the other person's voice and picture arrive here
     pc.ontrack = (event) => {
-      if (remoteAudioRef.current) {
-        remoteAudioRef.current.srcObject = event.streams[0];
-      }
+      if (event.streams[0]) setRemoteStream(event.streams[0]);
+      if (event.track.kind === "video") setRemoteHasVideo(true);
     };
 
     pc.onconnectionstatechange = () => {
@@ -161,7 +200,7 @@ function CallProvider({ children }) {
     });
   };
 
-  // Called from the call button in the chat header
+  // Called from the call buttons in the chat header
   const startCall = async (conversation, type = "audio") => {
     if (callRef.current || startingRef.current) return;
 
@@ -172,15 +211,19 @@ function CallProvider({ children }) {
     }
 
     startingRef.current = true;
-    let stream;
+    let media;
     try {
-      stream = await getMicrophone(); // the permission prompt appears here
+      media = await getMedia(type === "video"); // the permission prompt appears here
     } catch (err) {
       startingRef.current = false;
       setNotice(err.message);
       return;
     }
-    localStreamRef.current = stream;
+
+    localStreamRef.current = media.stream;
+    setLocalStream(media.stream);
+    setHasCamera(media.hasVideo);
+    if (type === "video" && !media.hasVideo) setNotice(CAMERA_FALLBACK_NOTICE);
 
     socket.timeout(8000).emit(
       "call:invite",
@@ -204,16 +247,18 @@ function CallProvider({ children }) {
     );
   };
 
-  const acceptCall = async () => {
+  // withVideo = false means "audio only", even for a video call
+  const acceptCall = async (withVideo = true) => {
     const current = callRef.current;
     if (!current || current.direction !== "incoming" || current.status !== "ringing") {
       return;
     }
     stopRingtone();
 
-    let stream;
+    const wantVideo = current.type === "video" && withVideo;
+    let media;
     try {
-      stream = await getMicrophone();
+      media = await getMedia(wantVideo);
     } catch (err) {
       // no microphone: decline the call and say why
       getSocket()?.emit("call:hangup", { callId: current.id });
@@ -223,11 +268,15 @@ function CallProvider({ children }) {
 
     // the call may have been cancelled while the permission prompt was open
     if (!callRef.current || callRef.current.id !== current.id) {
-      stream.getTracks().forEach((track) => track.stop());
+      media.stream.getTracks().forEach((track) => track.stop());
       return;
     }
 
-    localStreamRef.current = stream;
+    localStreamRef.current = media.stream;
+    setLocalStream(media.stream);
+    setHasCamera(media.hasVideo);
+    if (wantVideo && !media.hasVideo) setNotice(CAMERA_FALLBACK_NOTICE);
+
     getSocket()?.emit("call:accept", { callId: current.id }, (reply) => {
       if (!reply?.ok) finishCall("This call is no longer available.");
     });
@@ -247,7 +296,25 @@ function CallProvider({ children }) {
     getSocket()?.emit("call:media", {
       callId: current.id,
       audio: !nextMuted,
-      video: false,
+      video: !cameraOff,
+      screen: false,
+    });
+  };
+
+  const toggleCamera = () => {
+    const stream = localStreamRef.current;
+    const current = callRef.current;
+    if (!stream || !current || stream.getVideoTracks().length === 0) return;
+
+    const nextCameraOff = !cameraOff;
+    stream.getVideoTracks().forEach((track) => {
+      track.enabled = !nextCameraOff; // keeps the connection, just stops sending real pictures
+    });
+    setCameraOff(nextCameraOff);
+    getSocket()?.emit("call:media", {
+      callId: current.id,
+      audio: !muted,
+      video: !nextCameraOff,
       screen: false,
     });
   };
@@ -343,11 +410,11 @@ function CallProvider({ children }) {
     }
   };
 
-  // The other person muted or unmuted
-  const onMedia = ({ callId, audio }) => {
+  // The other person muted / unmuted or turned their camera off / on
+  const onMedia = ({ callId, audio, video }) => {
     const current = callRef.current;
     if (current && current.id === callId) {
-      updateCall({ ...current, remoteMuted: !audio });
+      updateCall({ ...current, remoteMuted: !audio, remoteVideoOff: !video });
     }
   };
 
@@ -439,21 +506,24 @@ function CallProvider({ children }) {
     <CallContext.Provider value={value}>
       {children}
 
-      {/* plays the other person's voice */}
-      <audio ref={remoteAudioRef} autoPlay />
-
       <CallOverlay
         call={call}
         muted={muted}
+        cameraOff={cameraOff}
+        hasCamera={hasCamera}
         elapsed={elapsed}
         notice={notice}
-        onAccept={acceptCall}
+        localStream={localStream}
+        remoteStream={remoteStream}
+        remoteHasVideo={remoteHasVideo}
+        onAccept={(withVideo) => acceptCall(withVideo)}
         onDecline={() => latest.current.hangUp()}
         onHangup={() => latest.current.hangUp()}
         onToggleMute={toggleMute}
+        onToggleCamera={toggleCamera}
       />
     </CallContext.Provider>
   );
 }
 
-export default CallProvider;
+export default CallProvider; 
