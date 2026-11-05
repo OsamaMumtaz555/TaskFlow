@@ -12,14 +12,18 @@ const messageSchema = new mongoose.Schema(
       ref: 'User',
       required: true,
     },
-    // Text is required, unless the message shares a task or a file (the note is optional then)
+    // Text is required, unless the message shares a task, a file or is a call line
     text: {
       type: String,
       trim: true,
       maxlength: 2000,
       default: '',
       required: function () {
-        return !this.task && !(this.attachment && this.attachment.originalName);
+        return (
+          !this.task &&
+          !(this.attachment && this.attachment.originalName) &&
+          !(this.call && this.call.type)
+        );
       },
     },
     // A shared task, and its title at the moment it was shared
@@ -32,6 +36,16 @@ const messageSchema = new mongoose.Schema(
       storedName: { type: String, select: false },
       mimeType: { type: String },
       size: { type: Number },
+    },
+    // A call that happened in this conversation (shown as a line in the chat).
+    // The sender is the person who made the call.
+    call: {
+      type: { type: String, enum: ['audio', 'video'] },
+      status: {
+        type: String,
+        enum: ['completed', 'missed', 'cancelled', 'declined'],
+      },
+      duration: { type: Number }, // seconds, for completed calls
     },
     readAt: { type: Date, default: null }, // null = the other person has not read it yet
   },

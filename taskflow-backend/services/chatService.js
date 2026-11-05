@@ -87,6 +87,74 @@ const saveMessage = async ({ conversationId, senderId, text, taskId, attachment 
   return { message: plain, conversation };
 };
 
+// ---------- calls in the chat history ----------
+
+// how a call ended -> the status shown in the chat
+const CALL_STATUS = {
+  hangup: 'completed',
+  disconnected: 'completed',
+  rejected: 'declined',
+  cancelled: 'cancelled',
+  missed: 'missed',
+};
+
+const formatDuration = (totalSeconds = 0) => {
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+};
+
+// The wording must match callPreview() in the frontend (utils/callHelpers.js)
+const callPreviewText = (call) => {
+  const label = call.type === 'video' ? 'video call' : 'voice call';
+  const title = call.type === 'video' ? 'Video call' : 'Voice call';
+  const icon = call.type === 'video' ? '🎥' : '📞';
+
+  switch (call.status) {
+    case 'completed':
+      return `${icon} ${title} · ${formatDuration(call.duration)}`;
+    case 'missed':
+      return `${icon} Missed ${label}`;
+    case 'cancelled':
+      return `${icon} Cancelled ${label}`;
+    case 'declined':
+      return `${icon} Declined ${label}`;
+    default:
+      return `${icon} ${title}`;
+  }
+};
+
+// Writes a call into the conversation as a message sent by the caller
+const saveCallMessage = async ({ conversationId, callerId, type, reason, duration }) => {
+  const conversation = await Conversation.findById(conversationId);
+  if (!conversation) return null;
+
+  const status = CALL_STATUS[reason] || 'missed';
+  const call = { type, status, duration: status === 'completed' ? duration : 0 };
+
+  // only calls the other person did NOT take count as unread
+  const needsAttention = status === 'missed' || status === 'cancelled';
+
+  const message = await Message.create({
+    conversation: conversation._id,
+    sender: callerId,
+    text: '',
+    call,
+    readAt: needsAttention ? null : new Date(),
+  });
+
+  conversation.lastMessage = {
+    text: callPreviewText(call),
+    sender: callerId,
+    sentAt: message.createdAt,
+  };
+  conversation.lastMessageAt = message.createdAt;
+  await conversation.save();
+
+  await message.populate(messagePopulate);
+  return { message: message.toObject(), conversation };
+};
+
 // Marks everything the OTHER person sent in this conversation as read
 const markRead = async (conversationId, userId) => {
   const conversation = await getConversationForUser(conversationId, userId);
@@ -103,5 +171,6 @@ module.exports = {
   messagePopulate,
   getConversationForUser,
   saveMessage,
+  saveCallMessage,
   markRead,
 };

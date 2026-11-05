@@ -1,6 +1,6 @@
 const crypto = require('crypto');
 const User = require('../models/User');
-const { getConversationForUser } = require('../services/chatService');
+const { getConversationForUser, saveCallMessage } = require('../services/chatService');
 
 // An unanswered call stops ringing after this long
 const RING_TIMEOUT_MS = Number(process.env.CALL_RING_TIMEOUT_MS) || 30 * 1000;
@@ -33,6 +33,23 @@ const endCall = (io, call, reason) => {
   };
   io.to(`user:${call.callerId}`).emit('call:ended', payload);
   io.to(`user:${call.calleeId}`).emit('call:ended', payload);
+
+  
+  // write the call into the chat history ("Voice call · 12:34", "Missed voice call"...)
+  saveCallMessage({
+    conversationId: call.conversationId,
+    callerId: call.callerId,
+    type: call.type,
+    reason,
+    duration,
+  })
+    .then((saved) => {
+      if (!saved) return;
+      saved.conversation.participants.forEach((participantId) => {
+        io.to(`user:${participantId}`).emit('message:new', saved.message);
+      });
+    })
+    .catch((error) => console.error('Failed to log the call:', error.message));
 };
 
 const registerCallHandlers = (io, socket, onlineUsers) => {

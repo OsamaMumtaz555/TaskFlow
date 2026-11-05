@@ -7,6 +7,7 @@ import TaskDetailModal from "./TaskDetailModal";
 import TaskPickerModal from "./TaskPickerModal";
 import CreateTaskModal from "./CreateTaskModal";
 import useCall from "../hooks/useCall";
+import CallLogLine from "./CallLogLine";
 import {
   initials,
   formatTime,
@@ -614,6 +615,20 @@ function MessageWindow({ conversation, currentUserId, isOnline, isTyping, onRead
                 index === 0 ||
                 !isSameDay(messages[index - 1].createdAt, message.createdAt);
               const hasAttachment = Boolean(message.attachment?.originalName);
+              
+              // a call in the history: "Voice call · 12:34", "Missed video call"...
+              if (message.call?.type) {
+                return (
+                  <CallLogLine
+                    key={message._id}
+                    message={message}
+                    mine={mine}
+                    showDay={showDay}
+                    canCallBack={isOnline && !inCall && !otherInactive}
+                    onCallBack={() => startCall(conversation, message.call.type)}
+                  />
+                );
+              }
 
               // appears next to the bubble when hovering a message that has text
               const createTaskLink = message.text && (

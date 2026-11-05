@@ -12,6 +12,9 @@ const VIDEO_CONSTRAINTS = {
   frameRate: { ideal: 24 },
 };
 
+// Phones and some browsers cannot share a screen
+const canShareScreen = Boolean(navigator.mediaDevices?.getDisplayMedia);
+
 // Turns browser microphone errors into friendly messages
 const microphoneError = (err) => {
   if (err.name === "NotAllowedError") {
@@ -59,11 +62,12 @@ const CAMERA_FALLBACK_NOTICE = "Camera unavailable, continuing with audio only."
 function CallProvider({ children }) {
   // call = { id, conversationId, type: "audio" | "video", direction: "outgoing" | "incoming",
   //          peer: { _id, name }, status: "ringing" | "connecting" | "active",
-  //          startedAt, reconnecting, remoteMuted, remoteVideoOff }   (null = no call)
+  //          startedAt, reconnecting, remoteMuted, remoteVideoOff, remoteScreen }   (null = no call)
   const [call, setCall] = useState(null);
   const [muted, setMuted] = useState(false);
   const [cameraOff, setCameraOff] = useState(false);
   const [hasCamera, setHasCamera] = useState(false); // my stream has a video track
+  const [sharing, setSharing] = useState(false); // I am sharing my screen
   const [localStream, setLocalStream] = useState(null);
   const [remoteStream, setRemoteStream] = useState(null);
   const [remoteHasVideo, setRemoteHasVideo] = useState(false);
@@ -73,6 +77,8 @@ function CallProvider({ children }) {
   const callRef = useRef(null); // the same call, readable from event handlers
   const pcRef = useRef(null); // the WebRTC connection
   const localStreamRef = useRef(null); // my camera and microphone
+  const screenTrackRef = useRef(null); // the track of my shared screen
+  const makingOfferRef = useRef(false); // I am in the middle of creating an offer
   const pendingCandidates = useRef([]); // network routes that arrived too early
   const startingRef = useRef(false); // a call is being started (permission prompt open)
   const endNoticeRef = useRef(""); // message to show when I end the call myself because of an error
@@ -83,7 +89,7 @@ function CallProvider({ children }) {
     setCall(next);
   };
 
-  // Stops the camera and microphone, closes the WebRTC connection, stops the ringtone
+  // Stops the camera, microphone and screen, closes the connection, stops the ringtone
   const cleanupMedia = () => {
     stopRingtone();
 
@@ -96,14 +102,23 @@ function CallProvider({ children }) {
       pcRef.current = null;
     }
 
+    const screenTrack = screenTrackRef.current;
+    if (screenTrack) {
+      screenTrack.onended = null;
+      screenTrack.stop();
+      screenTrackRef.current = null;
+    }
+
     localStreamRef.current?.getTracks().forEach((track) => track.stop());
     localStreamRef.current = null;
     pendingCandidates.current = [];
+    makingOfferRef.current = false;
 
     setLocalStream(null);
     setRemoteStream(null);
     setRemoteHasVideo(false);
     setHasCamera(false);
+    setSharing(false);
     setMuted(false);
     setCameraOff(false);
     setElapsed(0);
@@ -133,6 +148,11 @@ function CallProvider({ children }) {
       pc.addTransceiver("video", { direction: "recvonly" });
     }
 
+    // Everything the other person sends (voice, camera, screen) is collected into ONE stream,
+    // so a new screen track never replaces their voice
+    const remote = new MediaStream();
+    setRemoteStream(remote);
+
     // every network route my browser finds is passed to the other browser
     pc.onicecandidate = (event) => {
       if (event.candidate) {
@@ -140,9 +160,8 @@ function CallProvider({ children }) {
       }
     };
 
-    // the other person's voice and picture arrive here
     pc.ontrack = (event) => {
-      if (event.streams[0]) setRemoteStream(event.streams[0]);
+      if (!remote.getTracks().includes(event.track)) remote.addTrack(event.track);
       if (event.track.kind === "video") setRemoteHasVideo(true);
     };
 
@@ -178,6 +197,19 @@ function CallProvider({ children }) {
       } catch (err) {
         console.error("Could not add an ICE candidate:", err);
       }
+    }
+  };
+
+  // Sends a NEW offer in the middle of a call (needed when a new kind of picture must be sent)
+  const renegotiate = async (pc, callId) => {
+    makingOfferRef.current = true;
+    try {
+      const offer = await pc.createOffer();
+      if (pc.signalingState !== "stable") return; // the other side started first
+      await pc.setLocalDescription(offer);
+      sendSignal(callId, { description: { type: offer.type, sdp: offer.sdp } });
+    } finally {
+      makingOfferRef.current = false;
     }
   };
 
@@ -283,6 +315,11 @@ function CallProvider({ children }) {
     updateCall({ ...callRef.current, status: "connecting" });
   };
 
+  // tells the other person what my microphone / camera / screen are doing
+  const sendMedia = (callId, state) => {
+    getSocket()?.emit("call:media", { callId, ...state });
+  };
+
   const toggleMute = () => {
     const stream = localStreamRef.current;
     const current = callRef.current;
@@ -293,11 +330,10 @@ function CallProvider({ children }) {
       track.enabled = !nextMuted;
     });
     setMuted(nextMuted);
-    getSocket()?.emit("call:media", {
-      callId: current.id,
+    sendMedia(current.id, {
       audio: !nextMuted,
-      video: !cameraOff,
-      screen: false,
+      video: hasCamera && !cameraOff,
+      screen: sharing,
     });
   };
 
@@ -311,12 +347,109 @@ function CallProvider({ children }) {
       track.enabled = !nextCameraOff; // keeps the connection, just stops sending real pictures
     });
     setCameraOff(nextCameraOff);
-    getSocket()?.emit("call:media", {
-      callId: current.id,
-      audio: !muted,
-      video: !nextCameraOff,
-      screen: false,
-    });
+    sendMedia(current.id, { audio: !muted, video: !nextCameraOff, screen: sharing });
+  };
+
+  // ---------- screen sharing ----------
+
+  const startScreenShare = async () => {
+    const current = callRef.current;
+    const pc = pcRef.current;
+    if (!current || !pc || current.status !== "active" || screenTrackRef.current) return;
+
+    if (!canShareScreen) {
+      setNotice("Screen sharing is not supported in this browser.");
+      return;
+    }
+
+    // the browser shows its own picker: a tab, a window or the whole screen
+    let displayStream;
+    try {
+      displayStream = await navigator.mediaDevices.getDisplayMedia({
+        video: { frameRate: { ideal: 15, max: 30 } },
+        audio: false,
+      });
+    } catch (err) {
+      // closing the picker is not an error
+      if (err.name !== "NotAllowedError" && err.name !== "AbortError") {
+        setNotice("Could not start screen sharing.");
+      }
+      return;
+    }
+
+    const track = displayStream.getVideoTracks()[0];
+    if ("contentHint" in track) track.contentHint = "detail"; // keep text sharp
+
+    // the call may have ended while the picker was open
+    if (!callRef.current || callRef.current.id !== current.id || !pcRef.current) {
+      track.stop();
+      return;
+    }
+
+    // the browser's own "Stop sharing" bar ends it too
+    track.onended = () => latest.current.stopScreenShare();
+    screenTrackRef.current = track;
+
+    try {
+      const transceiver = pc
+        .getTransceivers()
+        .find((t) => t.receiver.track.kind === "video");
+
+      if (transceiver) {
+        // there is already a video line (my camera, or one I can send on): swap the picture
+        await transceiver.sender.replaceTrack(track);
+        if (transceiver.direction === "recvonly") {
+          // this line could only receive, so the call has to be renegotiated once
+          transceiver.direction = "sendrecv";
+          await renegotiate(pc, current.id);
+        }
+      } else {
+        // a voice call has no video line yet: add one and renegotiate
+        pc.addTrack(track, displayStream);
+        await renegotiate(pc, current.id);
+      }
+
+      setSharing(true);
+      sendMedia(current.id, { audio: !muted, video: false, screen: true });
+    } catch (err) {
+      console.error("Could not start screen sharing:", err);
+      track.onended = null;
+      track.stop();
+      screenTrackRef.current = null;
+      setNotice("Could not start screen sharing.");
+    }
+  };
+
+  const stopScreenShare = async () => {
+    const track = screenTrackRef.current;
+    if (!track) return;
+
+    screenTrackRef.current = null;
+    track.onended = null;
+    track.stop();
+    setSharing(false);
+
+    const pc = pcRef.current;
+    const current = callRef.current;
+
+    // put my camera back on the line (or nothing, if I have no camera)
+    if (pc) {
+      const sender = pc.getSenders().find((s) => s.track === track);
+      const camera = localStreamRef.current?.getVideoTracks()[0] || null;
+      try {
+        if (sender) await sender.replaceTrack(camera);
+      } catch (err) {
+        console.error("Could not restore the camera:", err);
+      }
+    }
+
+    if (current) {
+      sendMedia(current.id, {
+        audio: !muted,
+        video: hasCamera && !cameraOff,
+        screen: false,
+      });
+    }
   };
 
   // ---------- events from the server ----------
@@ -343,9 +476,7 @@ function CallProvider({ children }) {
     updateCall({ ...current, status: "connecting" });
     try {
       const pc = createPeer(callId);
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-      sendSignal(callId, { description: { type: offer.type, sdp: offer.sdp } });
+      await renegotiate(pc, callId); // the first offer
     } catch (err) {
       console.error("Could not create the offer:", err);
       hangUp("Could not start the call.");
@@ -360,15 +491,24 @@ function CallProvider({ children }) {
     try {
       if (data.description) {
         if (data.description.type === "offer") {
-          // I am the callee: answer the offer
+          // an offer: the first one of the call, or a renegotiation (for example a shared screen)
           const pc = pcRef.current || createPeer(callId);
+
+          // If both sides sent an offer at the same moment, the caller wins:
+          // the callee ("polite") gives up its own offer, the caller ignores the other one
+          const polite = current.direction === "incoming";
+          const collision = makingOfferRef.current || pc.signalingState !== "stable";
+          if (collision && !polite) return;
+
           await pc.setRemoteDescription(data.description);
           await flushCandidates(pc);
           const answer = await pc.createAnswer();
           await pc.setLocalDescription(answer);
           sendSignal(callId, { description: { type: answer.type, sdp: answer.sdp } });
-        } else if (data.description.type === "answer" && pcRef.current) {
-          // I am the caller: the answer arrived
+        } else if (
+          data.description.type === "answer" &&
+          pcRef.current?.signalingState === "have-local-offer"
+        ) {
           await pcRef.current.setRemoteDescription(data.description);
           await flushCandidates(pcRef.current);
         }
@@ -410,11 +550,16 @@ function CallProvider({ children }) {
     }
   };
 
-  // The other person muted / unmuted or turned their camera off / on
-  const onMedia = ({ callId, audio, video }) => {
+  // The other person muted / unmuted, turned their camera off / on, or started / stopped sharing
+  const onMedia = ({ callId, audio, video, screen }) => {
     const current = callRef.current;
     if (current && current.id === callId) {
-      updateCall({ ...current, remoteMuted: !audio, remoteVideoOff: !video });
+      updateCall({
+        ...current,
+        remoteMuted: !audio,
+        remoteVideoOff: !video,
+        remoteScreen: Boolean(screen),
+      });
     }
   };
 
@@ -428,6 +573,7 @@ function CallProvider({ children }) {
     latest.current = {
       hangUp,
       startCall,
+      stopScreenShare,
       onIncoming,
       onAccepted,
       onSignal,
@@ -511,6 +657,8 @@ function CallProvider({ children }) {
         muted={muted}
         cameraOff={cameraOff}
         hasCamera={hasCamera}
+        sharing={sharing}
+        canShare={canShareScreen}
         elapsed={elapsed}
         notice={notice}
         localStream={localStream}
@@ -521,6 +669,7 @@ function CallProvider({ children }) {
         onHangup={() => latest.current.hangUp()}
         onToggleMute={toggleMute}
         onToggleCamera={toggleCamera}
+        onToggleShare={() => (sharing ? stopScreenShare() : startScreenShare())}
       />
     </CallContext.Provider>
   );

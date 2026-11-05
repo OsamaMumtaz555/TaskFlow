@@ -25,11 +25,20 @@ function VideoTile({ stream, muted = false, mirrored = false, className = "" }) 
 // Invisible, but it still plays the other person's voice
 const SOUND_ONLY = "absolute w-px h-px opacity-0 pointer-events-none";
 
+const controlClass = (highlight) =>
+  `flex-1 text-sm font-semibold py-2 px-2 rounded-md transition disabled:opacity-40 disabled:cursor-not-allowed ${
+    highlight
+      ? "bg-yellow-400 text-gray-900 hover:bg-yellow-300"
+      : "bg-gray-700 text-white hover:bg-gray-600"
+  }`;
+
 function CallOverlay({
   call,
   muted,
   cameraOff,
   hasCamera,
+  sharing,
+  canShare,
   elapsed,
   notice,
   localStream,
@@ -40,17 +49,30 @@ function CallOverlay({
   onHangup,
   onToggleMute,
   onToggleCamera,
+  onToggleShare,
 }) {
   const [expanded, setExpanded] = useState(false);
+  const [stickyVideo, setStickyVideo] = useState(false);
 
-  // go back to the small panel when the call ends
+  const sharingOrWatching = Boolean(sharing || call?.remoteScreen);
+
+  // Once a screen was shared, keep the large layout until the call ends (no flicker)
   useEffect(() => {
-    if (!call) setExpanded(false);
-  }, [call]);
+    if (!call) {
+      setExpanded(false);
+      setStickyVideo(false);
+    } else if (sharingOrWatching) {
+      setStickyVideo(true);
+    }
+  }, [call, sharingOrWatching]);
 
   const incomingRinging =
     call && call.direction === "incoming" && call.status === "ringing";
-  const isVideo = call?.type === "video";
+  const isVideoCall = call?.type === "video";
+  const videoLayout =
+    Boolean(call) && !incomingRinging && (isVideoCall || stickyVideo || sharingOrWatching);
+  const audioLayout = Boolean(call) && !incomingRinging && !videoLayout;
+  const active = call?.status === "active";
 
   let statusText = "";
   if (call && !incomingRinging) {
@@ -62,19 +84,29 @@ function CallOverlay({
 
   // what the big picture shows
   const showRemoteVideo =
-    isVideo && call?.status !== "ringing" && remoteHasVideo && !call?.remoteVideoOff;
-  const showLocalMain = isVideo && call?.status === "ringing" && hasCamera && !cameraOff;
+    videoLayout &&
+    call?.status !== "ringing" &&
+    remoteHasVideo &&
+    (call?.remoteScreen || !call?.remoteVideoOff);
+  const showLocalMain =
+    videoLayout && call?.status === "ringing" && hasCamera && !cameraOff;
   const myCameraShown = hasCamera && !cameraOff;
 
   // when there is no picture to show, say why
   let placeholderNote = "";
-  if (call?.status === "active") {
+  if (active) {
     placeholderNote = remoteHasVideo
-      ? call.remoteVideoOff
+      ? call.remoteVideoOff && !call.remoteScreen
         ? "Camera is off"
         : ""
       : "Audio only";
   }
+
+  const shareButton = canShare && active && (
+    <button onClick={onToggleShare} className={controlClass(sharing)}>
+      {sharing ? "Stop sharing" : "Share screen"}
+    </button>
+  );
 
   return (
     <>
@@ -88,7 +120,7 @@ function CallOverlay({
             <div className="min-w-0">
               <p className="font-semibold text-gray-800 truncate">{call.peer.name}</p>
               <p className="text-sm text-gray-500">
-                Incoming {isVideo ? "video" : "voice"} call...
+                Incoming {isVideoCall ? "video" : "voice"} call...
               </p>
             </div>
           </div>
@@ -99,7 +131,7 @@ function CallOverlay({
             >
               Decline
             </button>
-            {isVideo && (
+            {isVideoCall && (
               <button
                 onClick={() => onAccept(false)}
                 className="flex-1 bg-gray-200 text-gray-800 font-semibold py-2 rounded-md hover:bg-gray-300 transition text-sm"
@@ -117,8 +149,8 @@ function CallOverlay({
         </div>
       )}
 
-      {/* A voice call in progress */}
-      {call && !incomingRinging && !isVideo && (
+      {/* A voice call in progress (small card) */}
+      {audioLayout && (
         <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[60] w-80 bg-gray-900 text-white rounded-xl shadow-2xl p-5">
           <VideoTile stream={remoteStream} className={SOUND_ONLY} />
 
@@ -129,28 +161,22 @@ function CallOverlay({
             <div className="min-w-0">
               <p className="font-semibold truncate">{call.peer.name}</p>
               <p className="text-sm text-gray-300">{statusText}</p>
-              {call.remoteMuted && call.status === "active" && (
+              {call.remoteMuted && active && (
                 <p className="text-xs text-yellow-300">{call.peer.name} is muted</p>
               )}
             </div>
           </div>
 
-          <div className="flex gap-3">
+          <div className="flex gap-2">
             {call.status !== "ringing" && (
-              <button
-                onClick={onToggleMute}
-                className={`flex-1 font-semibold py-2 rounded-md transition ${
-                  muted
-                    ? "bg-yellow-400 text-gray-900 hover:bg-yellow-300"
-                    : "bg-gray-700 text-white hover:bg-gray-600"
-                }`}
-              >
+              <button onClick={onToggleMute} className={controlClass(muted)}>
                 {muted ? "Unmute" : "Mute"}
               </button>
             )}
+            {shareButton}
             <button
               onClick={onHangup}
-              className="flex-1 bg-red-600 text-white font-semibold py-2 rounded-md hover:bg-red-700 transition"
+              className="flex-1 text-sm bg-red-600 text-white font-semibold py-2 rounded-md hover:bg-red-700 transition"
             >
               {call.status === "ringing" ? "Cancel" : "Hang up"}
             </button>
@@ -158,11 +184,11 @@ function CallOverlay({
         </div>
       )}
 
-      {/* A video call in progress */}
-      {call && !incomingRinging && isVideo && (
+      {/* A video call, or any call with a shared screen (large panel) */}
+      {videoLayout && (
         <div
           className={`fixed z-[60] bg-gray-900 text-white rounded-xl shadow-2xl overflow-hidden flex flex-col ${
-            expanded ? "inset-6" : "bottom-6 left-1/2 -translate-x-1/2 w-[26rem]"
+            expanded ? "inset-6" : "bottom-6 left-1/2 -translate-x-1/2 w-[30rem]"
           }`}
         >
           {/* the picture area */}
@@ -205,7 +231,13 @@ function CallOverlay({
             <div className="absolute top-3 left-3 bg-black/50 rounded-md px-3 py-1.5">
               <p className="text-sm font-semibold">{call.peer.name}</p>
               <p className="text-xs text-gray-200">{statusText}</p>
-              {call.remoteMuted && call.status === "active" && (
+              {call.remoteScreen && active && (
+                <p className="text-xs text-green-300">Sharing their screen</p>
+              )}
+              {sharing && (
+                <p className="text-xs text-green-300">You are sharing your screen</p>
+              )}
+              {call.remoteMuted && active && (
                 <p className="text-xs text-yellow-300">Muted</p>
               )}
             </div>
@@ -228,7 +260,7 @@ function CallOverlay({
                 />
                 {!myCameraShown && (
                   <div className="w-full h-full flex items-center justify-center text-[11px] text-gray-300">
-                    Camera off
+                    {isVideoCall ? "Camera off" : "No camera"}
                   </div>
                 )}
               </div>
@@ -236,35 +268,27 @@ function CallOverlay({
           </div>
 
           {/* the buttons */}
-          <div className="p-4 flex gap-3">
+          <div className="p-4 flex gap-2">
             {call.status !== "ringing" && (
               <>
-                <button
-                  onClick={onToggleMute}
-                  className={`flex-1 font-semibold py-2 rounded-md transition ${
-                    muted
-                      ? "bg-yellow-400 text-gray-900 hover:bg-yellow-300"
-                      : "bg-gray-700 text-white hover:bg-gray-600"
-                  }`}
-                >
+                <button onClick={onToggleMute} className={controlClass(muted)}>
                   {muted ? "Unmute" : "Mute"}
                 </button>
-                <button
-                  onClick={onToggleCamera}
-                  disabled={!hasCamera}
-                  className={`flex-1 font-semibold py-2 rounded-md transition disabled:opacity-40 disabled:cursor-not-allowed ${
-                    cameraOff
-                      ? "bg-yellow-400 text-gray-900 hover:bg-yellow-300"
-                      : "bg-gray-700 text-white hover:bg-gray-600"
-                  }`}
-                >
-                  {cameraOff ? "Camera on" : "Camera off"}
-                </button>
+                {isVideoCall && (
+                  <button
+                    onClick={onToggleCamera}
+                    disabled={!hasCamera}
+                    className={controlClass(cameraOff)}
+                  >
+                    {cameraOff ? "Camera on" : "Camera off"}
+                  </button>
+                )}
               </>
             )}
+            {shareButton}
             <button
               onClick={onHangup}
-              className="flex-1 bg-red-600 text-white font-semibold py-2 rounded-md hover:bg-red-700 transition"
+              className="flex-1 text-sm bg-red-600 text-white font-semibold py-2 rounded-md hover:bg-red-700 transition"
             >
               {call.status === "ringing" ? "Cancel" : "Hang up"}
             </button>

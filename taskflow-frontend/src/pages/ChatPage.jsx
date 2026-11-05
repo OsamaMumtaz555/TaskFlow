@@ -8,6 +8,15 @@ import ConversationList from "../components/ConversationList";
 import MessageWindow from "../components/MessageWindow";
 import NewChatModal from "../components/NewChatModal";
 import { getCurrentUser } from "../utils/taskHelpers";
+import { callPreview } from "../utils/callHelpers";
+
+// the short text shown in the conversation list for a new message
+const previewOf = (message) => {
+  if (message.text) return message.text;
+  if (message.attachment) return `📎 ${message.attachment.originalName}`;
+  if (message.call?.type) return callPreview(message.call);
+  return `📎 ${message.taskTitle}`;
+};
 
 function ChatPage() {
   const [conversations, setConversations] = useState([]);
@@ -100,6 +109,10 @@ function ChatPage() {
         document.visibilityState === "visible" &&
         document.hasFocus();
 
+      // a call that was answered or declined needs no attention; a missed one does
+      const callNeedsNoAttention =
+        message.call?.type && !["missed", "cancelled"].includes(message.call.status);
+
       if (!fromMe) clearTyping(message.conversation); // they sent it, so they stopped typing
 
       // A teammate started a brand-new conversation with me: load the list again
@@ -115,20 +128,16 @@ function ChatPage() {
               ? {
                   ...c,
                   lastMessage: {
-                    // text, or a file name, or a task title for messages without text
-                    text: (
-                      message.text ||
-                      (message.attachment
-                        ? `📎 ${message.attachment.originalName}`
-                        : `📎 ${message.taskTitle}`)
-                    ).slice(0, 100),
+                    text: previewOf(message).slice(0, 100),
                     sender: message.sender._id,
                     sentAt: message.createdAt,
                   },
                   lastMessageAt: message.createdAt,
-                  // not mine and not the one I'm looking at: count it as unread
+                  // not mine, not the one I'm looking at, and not a handled call: unread
                   unreadCount:
-                    fromMe || isOpen ? c.unreadCount : c.unreadCount + 1,
+                    fromMe || isOpen || callNeedsNoAttention
+                      ? c.unreadCount
+                      : c.unreadCount + 1,
                 }
               : c
           )
